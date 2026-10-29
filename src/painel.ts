@@ -19,7 +19,8 @@ export interface ExtrasPainel { eventos: { por_status: Array<Record<string, unkn
 export function paginaPainel(p: Record<string, unknown>, m: Metricas, x: ExtrasPainel, quem: Quem, q: string): string {
   const estado = (p.estado ?? {}) as Record<string, { nivel: number; parado: boolean }>;
   const acoes = ((p.acoes as { acoes?: Array<Record<string, unknown>> })?.acoes ?? []).slice(0, 30);
-  const criativos = ((p.criativos as Array<Record<string, unknown>>) ?? []).slice(0, 12);
+  // reprovado ou com erro antes de ter imagem não aparece: não há nada para olhar (fica em /admin/agentes)
+  const criativos = ((p.criativos as Array<Record<string, unknown>>) ?? []).filter((c) => c.imagem_chave || c.video_chave || !(c.status === "reprovado" || c.status === "erro")).slice(0, 12);
   const alertas = ((p.alertas as Array<Record<string, unknown>>) ?? []).slice(0, 10);
   const execucoes = ((p.execucoes as Array<Record<string, unknown>>) ?? []).slice(0, 12);
   const publicos = (p.publicos as Array<Record<string, unknown>>) ?? [];
