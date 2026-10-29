@@ -298,8 +298,8 @@ export async function rodarCriador(env: CriadorEnv, nivel: number, deps: { rende
   if (!env.CRIATIVOS) { out.bloqueado = "R2 CRIATIVOS não configurado"; return out; }
   const pendentes = await pedidosPendentes(env.DB, deps.soPedido);
   for (const p of pendentes) {
-    // um pedido vindo de feedback (nova versão) não conta no ritmo: a pessoa está esperando
-    const r = p.origem === "feedback" ? null : await ritmo(env.DB, hoje, agora);
+    // um pedido vindo de feedback (nova versão) ou uma rodada pedida à mão para um pedido só não conta no ritmo: a pessoa está esperando
+    const r = p.origem === "feedback" || deps.soPedido != null ? null : await ritmo(env.DB, hoje, agora);
     if (r && r.hoje >= CRIADOR_MAX_DIA) { out.detalhes.push({ pedido: p.id, criativo: null, status: "adiado", nota: `limite de ${CRIADOR_MAX_DIA} por dia` }); continue; }
     if (r && nivel >= 2 && r.dias_desde_ultimo != null && r.dias_desde_ultimo < CRIADOR_INTERVALO_DIAS) { out.detalhes.push({ pedido: p.id, criativo: null, status: "adiado", nota: `último publicado há ${r.dias_desde_ultimo} dias (mínimo ${CRIADOR_INTERVALO_DIAS})` }); continue; }
     // pedido velho (mais de 7 dias) expira sem gerar

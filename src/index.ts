@@ -16,7 +16,8 @@
  *   POST /admin/anuncios/varrer[?dias=7] · GET /admin/anuncios · GET /admin/analista · POST /admin/analista/rodar
  *   GET  /admin/agentes · /dossie · POST /admin/agentes/rodar · PUT /admin/agentes/estado?agente=&nivel=&parado=
  *   POST /admin/agentes/vigia · /estrategista[?forcar=1] · /relator[?forcar=1] · /publicos
- *   POST /admin/criativos/pedir?angulo=&formato=imagem|video · GET /admin/criativos/<id>.png|.webm · /biblioteca
+ *   POST /admin/criativos/pedir?angulo=&formato=imagem|video · POST /admin/criativos/pedidos/<id>/gerar[?nivel=1]
+ *   GET  /admin/criativos/<id>.png|.webm · /biblioteca
  *   POST /admin/criativos/<id>/(publicar|reprovar|melhorar)
  *   GET  /admin/paginas · POST /admin/paginas/atualizar[?forcar=1]
  *   POST /admin/pagamento/importar?tabela=clientes|pagamentos (CSV) · GET /admin/ingestao
@@ -31,7 +32,7 @@ import { resumoAnalista, rodarAnalista } from "./analista.ts";
 import { painelAgentes, rodarEquipe, rodarVigiaHorario } from "./agentes/equipe.ts";
 import { gravarEstado, lerEstado } from "./agentes/gestor.ts";
 import { montarDossie } from "./agentes/dossie.ts";
-import { acaoCriativo, contextoDoCriador, registrarPedido } from "./agentes/criador.ts";
+import { acaoCriativo, contextoDoCriador, registrarPedido, rodarCriador } from "./agentes/criador.ts";
 import type { AcaoCriativo } from "./agentes/criador.ts";
 import { montarBiblioteca } from "./agentes/biblioteca.ts";
 import { atualizarPaginas, lerResumos } from "./agentes/paginas.ts";
@@ -133,6 +134,13 @@ async function admin(path: string, request: Request, url: URL, env: Env): Promis
     const angulo = (url.searchParams.get("angulo") ?? "").trim();
     if (angulo.length < 10) throw new HttpError(400, "informe ?angulo=<a ideia do anúncio, em uma frase>[&formato=video]");
     return json({ ok: true, pedido: await registrarPedido(env.DB, diaBrt(new Date()), "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo, motivo: url.searchParams.get("motivo") ?? "pedido manual", formato: url.searchParams.get("formato") === "video" ? "video" : "imagem" }) });
+  }
+  const gerar = /^\/admin\/criativos\/pedidos\/(\d+)\/gerar$/.exec(path);
+  if (gerar && method === "POST") {
+    // atende um pedido agora, fora do ritmo; ?nivel=1 gera em sombra mesmo com o Criador no nível 2
+    const nivelS = url.searchParams.get("nivel");
+    const nivel = nivelS == null ? ((await lerEstado(env.DB)).criador?.nivel ?? 0) : clampInt(nivelS, 1, 1, 2);
+    return json(await rodarCriador(env, nivel, { renderPng: renderDe(env)!, renderWebm: renderWebmDe(env), soPedido: Number(gerar[1]) }));
   }
   if (path === "/admin/criativos/biblioteca" && method === "GET") return json({ biblioteca: await montarBiblioteca(env.DB), prompt: await contextoDoCriador(env, new Date()) });
   const acao = /^\/admin\/criativos\/(\d+)\/(publicar|reprovar|melhorar)$/.exec(path);

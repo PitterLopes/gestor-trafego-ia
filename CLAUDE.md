@@ -96,7 +96,7 @@ Já está no ar desde a fase 1. Agora, com pagamento e Meta ligados, abra `/pain
 
 ## Fase 6 · Time em sombra
 
-`POST /admin/agentes/rodar`. Mostre o `resumo` do Analista, o plano do Estrategista e o primeiro criativo (peça um à mão se não houver pedido: `POST /admin/criativos/pedir?angulo=...` e, para vídeo, `&formato=video`). Diga com todas as letras: **nada foi executado na Meta**; analista e gestor estão em sombra (nível 1), criador em 0, vigia/estrategista/relator em 2 (só leem, planejam e escrevem), públicos em 1 (só conta).
+`POST /admin/agentes/rodar`. Mostre o `resumo` do Analista, o plano do Estrategista e o primeiro criativo (peça um à mão se não houver pedido: `POST /admin/criativos/pedir?angulo=...` e, para vídeo, `&formato=video`; para atender na hora, fora do ritmo e em sombra: `POST /admin/criativos/pedidos/<id>/gerar?nivel=1`). Diga com todas as letras: **nada foi executado na Meta**; analista e gestor estão em sombra (nível 1), criador em 0, vigia/estrategista/relator em 2 (só leem, planejam e escrevem), públicos em 1 (só conta).
 
 ## Fase 7 · Ligar, devagar
 
