@@ -224,7 +224,7 @@ export async function publicarNaMeta(env: CriadorEnv, c: Copy, png: Uint8Array, 
     page_id: env.META_PAGE_ID,
     link_data: { image_hash: hash, link: env.CRIADOR_LINK, message: c.texto_primario, name: c.headline, description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } },
   };
-  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), use_page_actor_override: "true", ...APRIMORAMENTOS }, fetchFn);
+  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), ...APRIMORAMENTOS }, fetchFn);
   const creativeId = typeof cr.json.id === "string" ? cr.json.id : null;
   if (!cr.ok || !creativeId) return { ok: false, etapa: "criativo", resposta: `HTTP ${cr.status}: ${cr.texto}` };
   const ad = await postMeta(env, `${conta}/ads`, { name: nome, adset_id: env.META_ADSET_CRIADOR_ID!, creative: JSON.stringify({ creative_id: creativeId }), status: "ACTIVE" }, fetchFn);
@@ -235,8 +235,8 @@ export async function publicarNaMeta(env: CriadorEnv, c: Copy, png: Uint8Array, 
 
 /**
  * Vídeo: sobe o WebM (advideos), espera processar, sobe a capa como imagem e cria criativo + anúncio.
- * use_page_actor_override: no Instagram o anúncio sai em nome da página do Facebook, sem exigir que a conta de anúncios
- * tenha acesso à conta do Instagram ligada à página (senão a Meta recusa com o subcódigo 1815199).
+ * No Instagram o anúncio sai em nome do perfil ligado à página: a conta de anúncios precisa estar conectada a esse perfil e o
+ * usuário do sistema precisa ter a página e o perfil atribuídos (senão a Meta recusa com o subcódigo 1815199).
  */
 export async function publicarVideoNaMeta(env: CriadorEnv, c: Copy, webm: Uint8Array, capa: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs = Number(env.META_VIDEO_ESPERA_MS ?? 4000), tentativas = 20): Promise<{ ok: true; video_id: string; imagem_hash: string; creative_id: string; ad_id: string } | { ok: false; etapa: string; resposta: string }> {
   const conta = `act_${env.META_AD_ACCOUNT_ID}`;
@@ -263,7 +263,7 @@ export async function publicarVideoNaMeta(env: CriadorEnv, c: Copy, webm: Uint8A
   const hash = Object.values((img.json.images ?? {}) as Record<string, { hash?: string }>)[0]?.hash;
   if (!img.ok || !hash) return { ok: false, etapa: "capa", resposta: `HTTP ${img.status}: ${img.texto}` };
   const spec = { page_id: env.META_PAGE_ID, video_data: { video_id: videoId, image_hash: hash, message: c.texto_primario, title: c.headline, link_description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } } };
-  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), use_page_actor_override: "true", ...APRIMORAMENTOS }, fetchFn);
+  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), ...APRIMORAMENTOS }, fetchFn);
   const creativeId = typeof cr.json.id === "string" ? cr.json.id : null;
   if (!cr.ok || !creativeId) return { ok: false, etapa: "criativo", resposta: `HTTP ${cr.status}: ${cr.texto}` };
   const ad = await postMeta(env, `${conta}/ads`, { name: nome, adset_id: env.META_ADSET_CRIADOR_ID!, creative: JSON.stringify({ creative_id: creativeId }), status: "ACTIVE" }, fetchFn);
