@@ -73,7 +73,8 @@ O sistema precisa de: **id da conta de anúncios** (só números), **id da pági
 Caminho do token (conduza pelo navegador dela pelas referências dos elementos; se ela não permitir, descreva os cliques):
 
 1. business.facebook.com → Configurações → Usuários → **Usuários do sistema** → Adicionar (função Funcionário basta).
-2. Atribuir ativos → Contas de anúncios → marque a conta → **Gerenciar campanhas** → Atribuir. Atribuir ativos → **Conjuntos de dados** → marque o pixel → Gerenciar → Atribuir (é isso que deixa os eventos saírem com o mesmo token).
+2. Atribuir ativos → Contas de anúncios → marque a conta → **Gerenciar campanhas** → Atribuir. Atribuir ativos → **Páginas** → marque a página → Criar anúncios → Atribuir. Atribuir ativos → **Contas do Instagram** → marque o perfil ligado à página → Anúncios → Atribuir. Atribuir ativos → **Conjuntos de dados** → marque o pixel → Gerenciar → Atribuir (é isso que deixa os eventos saírem com o mesmo token). Sem a página e o Instagram no usuário do sistema, a Meta recusa o anúncio com "a conta de anúncios não tem acesso à conta do Instagram" (subcódigo 1815199).
+2b. Configurações → Contas → **Contas do Instagram** → o perfil → **Conectar ativos** → Contas de anúncios → marque a conta. (O perfil precisa estar ligado à página em Páginas → Contas do Instagram conectadas.)
 3. Atribuir ativos → Apps → um app do portfólio com o caso de uso "Criar e gerenciar anúncios com a API de Marketing" (se nenhum tiver, crie o app em developers.facebook.com e adicione o caso de uso). Marque **Desenvolver app** → Atribuir.
 4. **Gerar token** → app → expiração **Nunca** → permissões `ads_read` e `ads_management` → Gerar. Se a Meta exigir aprovação de um segundo administrador, explique que é uma trava dela e espere.
 5. Ela copia o token e grava: `npx wrangler secret put META_ADS_TOKEN`.
@@ -118,6 +119,8 @@ Termine com um resumo escrito para ela guardar: o endereço do painel e de `/ent
 - `Navigation timeout` no criativo: o navegador não carregou a fonte; a imagem sai com a fonte reserva. Se repetir, troque a fonte no template por uma do sistema.
 - Vídeo com `MediaRecorder sem WebM` ou `o navegador não entregou o vídeo`: o Browser Rendering da conta não gravou; o pedido fica com erro e o Criador segue com imagens. Reporte.
 - `HTTP 403` da Meta ao executar: o token não tem `ads_management` ou o usuário do sistema não tem "Gerenciar campanhas" na conta. Nos eventos: o conjunto de dados não está atribuído ao usuário do sistema.
+- "A conta de anúncios não tem acesso à conta do Instagram" (1815199) ao publicar um criativo: faltou a fase 3, passos 2 e 2b (página e Instagram no usuário do sistema; conta de anúncios conectada ao perfil).
+- "O criativo não deve incluir aprimoramentos padrão" (3858504): a Meta mudou a lista de recursos; ajuste `APRIMORAMENTOS_DESLIGADOS` em `src/agentes/criador.ts` (a mensagem de erro diz qual nome ela não aceita).
 - A Meta "não encontra" cadastros: confira em `src/anuncios.ts` quais `action_type` contam como cadastro para a conta dela.
 - Webhook chega com erro no painel (cartão Pagamento): veja o `erro` em `GET /admin/ingestao`; quase sempre é `PAGAMENTO_TOKEN` faltando (Iugu/Asaas) ou evento não marcado na plataforma.
 - Métricas do painel não batem: confira `CICLO_DIAS`/`TOLERANCIA_DIAS` e se o CSV de pagamentos tem o 1º pagamento de cada cliente (sem ele, o cliente aparece como "entrou e não pagou").
