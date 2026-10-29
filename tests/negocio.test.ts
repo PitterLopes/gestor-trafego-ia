@@ -206,3 +206,23 @@ test("captura.js aponta para /lead do Worker e guarda fbclid/gclid/utm; /lead ex
   const l = sqlite.prepare("SELECT email, gclid, utm_json FROM leads").get() as Record<string, string>;
   assert.deepEqual({ ...l }, { email: "a@x.com", gclid: "G1", utm_json: '{"utm_source":"google"}' });
 });
+
+// ---------- painel ----------
+
+test("painel e /entrar renderizam com dados vazios e com um criativo em sombra (botões) e um vídeo", async () => {
+  const { paginaPainel } = await import("../src/painel.ts");
+  const { paginaEntrar } = await import("../src/login.ts");
+  const vazio = calcularMetricas([], [], AGORA);
+  const extras = { eventos: { por_status: [], ultimos_erros: [] }, eventos_ativos: false, ingestao: { ultimos: [], clientes: 0, pagamentos: 0, com_clique: 0 } };
+  const h0 = paginaPainel({}, vazio, extras, { email: "a@x.com", nome: "A", papel: "admin" }, "");
+  assert.ok(h0.includes("Negócio") && h0.includes("Nenhum criativo ainda") && h0.includes("Desligados"));
+  const p = { estado: { criador: { nivel: 1, parado: false } }, criativos: [
+    { id: 1, dia: "2026-10-29", status: "sombra", imagem_chave: "criativos/1.png", copy: { headline: "H", texto_primario: "T" }, formato: "imagem" },
+    { id: 2, dia: "2026-10-29", status: "publicado", formato: "video", video_chave: "criativos/2.webm", copy: { headline: "V" }, ad_id: "ad7", criativo_pai: 1 },
+  ] };
+  const h1 = paginaPainel(p, vazio, extras, { email: "admin", nome: "administrador (token)", papel: "admin" }, "?token=t");
+  assert.ok(h1.includes('action="/painel/criativos/1/publicar?token=t"') && h1.includes('action="/painel/criativos/1/melhorar?token=t"') && h1.includes('name="feedback"'));
+  assert.ok(h1.includes('src="/painel/criativos/2.webm?token=t"') && h1.includes("nova versão do nº 1"));
+  assert.ok(!h1.includes('action="/painel/criativos/2/publicar'), "publicado não tem botão");
+  assert.ok(paginaEntrar().includes("/auth/codigo"));
+});
