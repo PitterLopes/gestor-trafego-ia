@@ -1,0 +1,4 @@
+# Copie para .dev.vars (ignorado pelo git) para rodar localmente com `npm run dev`.
+ADMIN_TOKEN=troque-por-uma-senha-longa
+META_ADS_TOKEN=
+OPENROUTER_API_KEY=

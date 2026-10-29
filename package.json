@@ -1,0 +1,26 @@
+{
+  "name": "gestor-trafego-ia",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Um time de gestão de tráfego pago com IA (Meta Ads) que roda sozinho na Cloudflare, dentro de limites escritos no código.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled --port 8790",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "migrate:local": "wrangler d1 migrations apply gestor-trafego --local",
+    "migrate:remote": "wrangler d1 migrations apply gestor-trafego --remote",
+    "logo": "node scripts/logo.mjs",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261012.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.149.0"
+  }
+}

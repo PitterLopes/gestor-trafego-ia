@@ -1,0 +1,55 @@
+# Gestor de tráfego com IA. O instalador (CLAUDE.md) preenche os valores marcados com <...>.
+name = "gestor-trafego-ia"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+# 03:00 de Brasília (06:00 UTC): coleta + regras + time. Nas outras horas, só o Vigia.
+[triggers]
+crons = ["0 6 * * *", "20 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gestor-trafego"
+database_id = "<id devolvido por: npx wrangler d1 create gestor-trafego>"
+migrations_dir = "migrations"
+
+# Criativos: navegador para renderizar HTML → PNG e bucket para guardar as imagens (npx wrangler r2 bucket create gestor-trafego-criativos).
+[browser]
+binding = "BROWSER"
+
+[[r2_buckets]]
+binding = "CRIATIVOS"
+bucket_name = "gestor-trafego-criativos"
+
+# Opcional: e-mail de alertas e relatórios (Cloudflare Email Service, com um domínio seu ativado). Sem isto, tudo fica só no painel.
+# [[send_email]]
+# name = "EMAIL"
+
+[observability]
+enabled = true
+
+[vars]
+# Endereço público do Worker (aparece nos e-mails). Depois do 1º deploy, o wrangler imprime o endereço workers.dev.
+APP_URL = "https://gestor-trafego-ia.<sua-conta>.workers.dev"
+# Meta: conta de anúncios (só números), página do Facebook e conjunto onde o Criador publica anúncios novos.
+META_AD_ACCOUNT_ID = "<id da conta de anúncios>"
+META_PAGE_ID = "<id da página do Facebook>"
+META_ADSET_CRIADOR_ID = "<id do conjunto de anúncios de teste>"
+# Landing pages: a primeira é o destino dos anúncios novos; as outras são lidas e resumidas (separadas por vírgula).
+CRIADOR_LINK = "https://<seu-site>"
+CRIADOR_PAGINAS = "https://<seu-site>"
+# Modelos pela OpenRouter (ids da lista deles) e teto de custo por dia em dólar.
+LLM_MODELO_ANALISTA = "anthropic/claude-sonnet-5.5"
+LLM_MODELO_ANALISTA_RESERVA = "deepseek/deepseek-v4-pro"
+LLM_MODELO_CRIADOR = "anthropic/claude-sonnet-5.5"
+LLM_MODELO_VERIFICADOR = "anthropic/claude-haiku-5.5"
+LLM_TETO_USD_DIA = "2"
+# Quem recebe alertas e o relatório semanal (vírgula) e o remetente, quando o e-mail estiver ligado.
+ALERTA_EMAILS = ""
+EMAIL_REMETENTE = "alertas@<seu-dominio>"
+
+# Segredos (npx wrangler secret put NOME):
+#   ADMIN_TOKEN         senha das rotas /admin e do /painel (invente uma longa)
+#   META_ADS_TOKEN      token de usuário do sistema da Meta com ads_read e ads_management
+#   OPENROUTER_API_KEY  chave da OpenRouter
