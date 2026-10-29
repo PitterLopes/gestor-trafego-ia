@@ -121,7 +121,7 @@ export function verificarPorRegras(c: Copy): Array<{ trecho: string; motivo: str
 }
 
 /** Motivos que dizem que NÃO há problema (o modelo lista o trecho mesmo assim). */
-const SEM_PROBLEMA = /\b(sem problema|dentro do permitido|sem reprova|nenhum problema|est[áa] ok|aprovad[oa])\b/i;
+const SEM_PROBLEMA = /\b(sem problema|dentro do permitido|sem reprova|nenhum problema|est[áa] ok|aprovad[oa]|(é|est[áa]) aceit[oa]|problema real: nenhum|trecho (é )?aceito)\b/i;
 
 export async function verificar(env: CriadorEnv, c: Copy, fetchFn: typeof fetch, agora: Date, pagina = ""): Promise<Verificacao> {
   const regras = verificarPorRegras(c);
