@@ -39,7 +39,7 @@ export const ESQUEMA_COPY = {
   },
 } as const;
 
-export const SISTEMA_VERIFICADOR = `Você revisa textos de anúncio de uma empresa de software antes de irem ao ar. Recebe a lista do que PODE ser afirmado, a lista do que é PROIBIDO e o texto. Para cada frase, decida se ela está dentro do permitido. Seja rigoroso com promessa de resultado, número inventado, "oficial", superlativo e preço diferente do permitido. Não reprove por estilo. Responda em JSON: problemas (lista de {trecho, motivo} SÓ com as frases que violam as listas; nunca inclua frases que estão em ordem; lista vazia quando não há nada a reprovar) e aprovado (true exatamente quando a lista de problemas está vazia).`;
+export const SISTEMA_VERIFICADOR = `Você revisa textos de anúncio de uma empresa de software antes de irem ao ar. Recebe a lista do que PODE ser afirmado, a lista do que é PROIBIDO e o texto. Para cada frase, decida se ela está dentro do permitido. Seja rigoroso com promessa de resultado, número inventado, "oficial", superlativo e preço diferente do permitido. Não reprove por estilo. Responda em JSON: problemas (lista de {trecho, motivo, viola}: SÓ frases que violam as listas, com viola = true; se listar uma frase que está em ordem, marque viola = false; lista vazia quando não há nada a reprovar) e aprovado (true exatamente quando nenhum item tem viola = true).`;
 
 export const ESQUEMA_VERIFICACAO = {
   type: "object",
@@ -49,7 +49,7 @@ export const ESQUEMA_VERIFICACAO = {
     aprovado: { type: "boolean" },
     problemas: {
       type: "array",
-      items: { type: "object", additionalProperties: false, required: ["trecho", "motivo"], properties: { trecho: { type: "string" }, motivo: { type: "string" } } },
+      items: { type: "object", additionalProperties: false, required: ["trecho", "motivo", "viola"], properties: { trecho: { type: "string" }, motivo: { type: "string" }, viola: { type: "boolean", description: "true só se o trecho viola as listas; false se está em ordem" } } },
     },
   },
 } as const;

@@ -121,12 +121,12 @@ export function verificarPorRegras(c: Copy): Array<{ trecho: string; motivo: str
 }
 
 /** Motivos que dizem que NÃO há problema (o modelo lista o trecho mesmo assim). */
-const SEM_PROBLEMA = /\b(sem problema|dentro do permitido|sem reprova|nenhum problema|est[áa] ok|aprovad[oa]|(é|est[áa]) aceit[oa]|problema real: nenhum|trecho (é )?aceito)\b/i;
+const SEM_PROBLEMA = /\b(sem problema|dentro do permitido|sem reprova|nenhum problema|est[áa] ok|aprovad[oa]|(é|est[áa]) aceit[oa]|problema real: nenhum|trecho (é )?aceito|conforme|est[áa] permitid[oa])\b/i;
 
 export async function verificar(env: CriadorEnv, c: Copy, fetchFn: typeof fetch, agora: Date, pagina = ""): Promise<Verificacao> {
   const regras = verificarPorRegras(c);
   if (regras.length) return { aprovado: false, problemas: regras, por: "regras" };
-  const r = await chamarLlm<{ aprovado: boolean; problemas: Array<{ trecho: string; motivo: string }> }>(env, {
+  const r = await chamarLlm<{ aprovado: boolean; problemas: Array<{ trecho: string; motivo: string; viola?: boolean }> }>(env, {
     agente: "verificador",
     modelo: env.LLM_MODELO_VERIFICADOR || MODELO_VERIFICADOR_PADRAO,
     modeloReserva: "deepseek/deepseek-v4.1-flash",
@@ -142,7 +142,7 @@ export async function verificar(env: CriadorEnv, c: Copy, fetchFn: typeof fetch,
   if (!r.ok || !ehObj(r.dados) || typeof r.dados.aprovado !== "boolean") return { aprovado: false, problemas: [{ trecho: "", motivo: `verificador indisponível: ${r.ok ? "resposta inválida" : r.erro}` }], por: "modelo" };
   // o modelo às vezes lista trechos "sem problema" e ainda assim marca aprovado=false: só conta o que é problema de verdade
   const problemas = Array.isArray(r.dados.problemas)
-    ? r.dados.problemas.filter((p) => ehObj(p) && typeof p.trecho === "string" && typeof p.motivo === "string" && !SEM_PROBLEMA.test(String(p.motivo))).map((p) => ({ trecho: String(p.trecho).slice(0, 200), motivo: String(p.motivo).slice(0, 300) }))
+    ? r.dados.problemas.filter((p) => ehObj(p) && typeof p.trecho === "string" && typeof p.motivo === "string" && p.viola !== false && !SEM_PROBLEMA.test(String(p.motivo))).map((p) => ({ trecho: String(p.trecho).slice(0, 200), motivo: String(p.motivo).slice(0, 300) }))
     : [];
   return { aprovado: problemas.length === 0, problemas, por: "regras+modelo" };
 }

@@ -236,7 +236,7 @@ test("feedback: 'melhorar' gera uma nova versão na hora, ligada à anterior, co
 
 test("verificador: trechos listados como 'sem problema' não reprovam, mesmo com aprovado=false do modelo", async () => {
   const { env } = banco();
-  const f = fetchFalso({ verificacao: { aprovado: false, problemas: [{ trecho: "x", motivo: "Afirmação dentro do permitido; sem problema." }, { trecho: "y", motivo: "Preço e teste estão dentro do permitido; sem problema." }] } });
+  const f = fetchFalso({ verificacao: { aprovado: false, problemas: [{ trecho: "x", motivo: "Afirmação dentro do permitido; sem problema.", viola: true }, { trecho: "y", motivo: "Grátis sem teste? Não: aqui está 'Teste grátis'. Conforme.", viola: true }, { trecho: "z", motivo: "promessa de resultado", viola: false }] } });
   await registrarPedido(env.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "x", motivo: "m" });
   const r = await rodarCriador(env, 1, { renderPng: renderFalso, fetchFn: f.fn, agora: AGORA });
   assert.equal(r.gerados, 1, JSON.stringify(r.detalhes));
