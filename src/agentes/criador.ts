@@ -147,6 +147,14 @@ export async function verificar(env: CriadorEnv, c: Copy, fetchFn: typeof fetch,
   return { aprovado: problemas.length === 0, problemas, por: "regras+modelo" };
 }
 
+/**
+ * Aprimoramentos automáticos da Meta (Advantage+ creative). O campo antigo `standard_enhancements` foi descontinuado
+ * (subcódigo 3858504): cada recurso é desligado um a um (lista em AdCreativeFeaturesSpec). Desligamos os que mudam o
+ * texto, a imagem ou o vídeo que o verificador aprovou; o que a Meta só reorganiza (ordem de mídia, selos) fica no padrão.
+ */
+export const APRIMORAMENTOS_DESLIGADOS = ["text_optimizations", "image_templates", "image_touchups", "adapt_to_placement", "add_text_overlay", "description_automation", "inline_comment", "generate_cta", "image_animation", "image_background_gen", "media_type_automation", "text_translation", "text_overlay_translation", "product_extensions", "site_extensions"];
+export const APRIMORAMENTOS: Record<string, string> = { degrees_of_freedom_spec: JSON.stringify({ creative_features_spec: Object.fromEntries(APRIMORAMENTOS_DESLIGADOS.map((k) => [k, { enroll_status: "OPT_OUT" }])) }) };
+
 /** O que a conta já aprendeu (anúncios que funcionam e que não) e a página de destino, para o prompt. */
 export async function contextoDoCriador(env: CriadorEnv, agora: Date): Promise<{ biblioteca: string; pagina: string }> {
   const [b, paginas] = await Promise.all([montarBiblioteca(env.DB, agora), lerResumos(env.DB)]);
@@ -216,7 +224,7 @@ export async function publicarNaMeta(env: CriadorEnv, c: Copy, png: Uint8Array, 
     page_id: env.META_PAGE_ID,
     link_data: { image_hash: hash, link: env.CRIADOR_LINK, message: c.texto_primario, name: c.headline, description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } },
   };
-  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), use_page_actor_override: "true", degrees_of_freedom_spec: JSON.stringify({ creative_features_spec: { standard_enhancements: { enroll_status: "OPT_OUT" } } }) }, fetchFn);
+  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), use_page_actor_override: "true", ...APRIMORAMENTOS }, fetchFn);
   const creativeId = typeof cr.json.id === "string" ? cr.json.id : null;
   if (!cr.ok || !creativeId) return { ok: false, etapa: "criativo", resposta: `HTTP ${cr.status}: ${cr.texto}` };
   const ad = await postMeta(env, `${conta}/ads`, { name: nome, adset_id: env.META_ADSET_CRIADOR_ID!, creative: JSON.stringify({ creative_id: creativeId }), status: "ACTIVE" }, fetchFn);
@@ -255,7 +263,7 @@ export async function publicarVideoNaMeta(env: CriadorEnv, c: Copy, webm: Uint8A
   const hash = Object.values((img.json.images ?? {}) as Record<string, { hash?: string }>)[0]?.hash;
   if (!img.ok || !hash) return { ok: false, etapa: "capa", resposta: `HTTP ${img.status}: ${img.texto}` };
   const spec = { page_id: env.META_PAGE_ID, video_data: { video_id: videoId, image_hash: hash, message: c.texto_primario, title: c.headline, link_description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } } };
-  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), use_page_actor_override: "true", degrees_of_freedom_spec: JSON.stringify({ creative_features_spec: { standard_enhancements: { enroll_status: "OPT_OUT" } } }) }, fetchFn);
+  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), use_page_actor_override: "true", ...APRIMORAMENTOS }, fetchFn);
   const creativeId = typeof cr.json.id === "string" ? cr.json.id : null;
   if (!cr.ok || !creativeId) return { ok: false, etapa: "criativo", resposta: `HTTP ${cr.status}: ${cr.texto}` };
   const ad = await postMeta(env, `${conta}/ads`, { name: nome, adset_id: env.META_ADSET_CRIADOR_ID!, creative: JSON.stringify({ creative_id: creativeId }), status: "ACTIVE" }, fetchFn);
