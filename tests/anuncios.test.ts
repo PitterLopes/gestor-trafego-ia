@@ -76,7 +76,7 @@ function d1Falso(db: DatabaseSync): D1Database {
 
 function banco(): { env: AnunciosEnv; sqlite: DatabaseSync } {
   const sqlite = new DatabaseSync(":memory:");
-  for (const m of ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8"));
+  for (const m of ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql", "0008_negocio.sql", "0009_feedback_video.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8"));
   return { env: { DB: d1Falso(sqlite), META_ADS_TOKEN: "tok", META_AD_ACCOUNT_ID: "123" }, sqlite };
 }
 

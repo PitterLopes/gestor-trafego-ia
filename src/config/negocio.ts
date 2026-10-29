@@ -48,6 +48,18 @@ export const TEMPLATE_CONVERSAS: Array<{ iniciais: string; cor: string; nome: st
 /** Cabeçalho do "celular" no template. */
 export const TEMPLATE_CABECALHO = { titulo: "WhatsApp · celular do dono", nota: "tudo misturado" };
 
+/** País (ISO, minúsculo) e moeda que vão nos eventos para a Meta. */
+export const PAIS = "br";
+export const MOEDA = "BRL";
+
+/**
+ * Como o negócio cobra: a cada quantos dias um cliente paga (30 = mensal) e quantos dias de atraso ainda contam
+ * como "ativo". Um cliente é ativo enquanto o último pagamento tiver menos de CICLO_DIAS + TOLERANCIA_DIAS.
+ * Para venda única (sem assinatura) use CICLO_DIAS = 0: ativo = pagou alguma vez e não cancelou.
+ */
+export const CICLO_DIAS = 30;
+export const TOLERANCIA_DIAS = 15;
+
 /** Limites do executor. Mudar aqui é um commit revisado, não um prompt. */
 export const LIMITES = {
   /** Soma do orçamento diário das campanhas ativas nunca passa disto (centavos). */

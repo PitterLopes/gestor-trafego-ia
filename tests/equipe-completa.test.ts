@@ -33,7 +33,7 @@ function d1Falso(db: DatabaseSync): D1Database {
   };
   return { prepare } as unknown as D1Database;
 }
-const MIGRACOES = ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql"];
+const MIGRACOES = ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql", "0008_negocio.sql", "0009_feedback_video.sql"];
 function banco(extra: Partial<EquipeEnv> = {}): { env: EquipeEnv; sqlite: DatabaseSync; emails: Array<{ to: string; subject: string; text: string }> } {
   const sqlite = new DatabaseSync(":memory:");
   for (const m of MIGRACOES) sqlite.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8"));

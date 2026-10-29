@@ -20,3 +20,22 @@ export async function renderizarPng(browser: BrowserWorker, html: string, largur
     await b.close();
   }
 }
+
+/**
+ * Grava o vídeo de um template que desenha em canvas e entrega window.__video (templates/chat_video.ts).
+ * A gravação acontece em tempo real dentro do navegador (15 s de vídeo = 15 s de espera).
+ */
+export async function renderizarWebm(browser: BrowserWorker, html: string, largura: number, altura: number, segundos: number): Promise<{ webm: Uint8Array; capa: Uint8Array; tipo: string }> {
+  const b = await puppeteer.launch(browser);
+  try {
+    const page = await b.newPage();
+    await page.setViewport({ width: largura, height: altura, deviceScaleFactor: 1 });
+    await page.setContent(html, { waitUntil: "load", timeout: 45_000 });
+    const r = (await page.waitForFunction("window.__video", { timeout: (segundos + 25) * 1000, polling: 500 }).then(() => page.evaluate("window.__video"))) as { base64?: string; capa?: string; tipo?: string; erro?: string };
+    if (!r || r.erro || !r.base64 || !r.capa) throw new Error(r?.erro ?? "o navegador não entregou o vídeo");
+    const dec = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+    return { webm: dec(r.base64), capa: dec(r.capa), tipo: r.tipo ?? "video/webm" };
+  } finally {
+    await b.close();
+  }
+}

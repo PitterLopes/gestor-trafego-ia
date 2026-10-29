@@ -22,7 +22,8 @@ binding = "BROWSER"
 binding = "CRIATIVOS"
 bucket_name = "gestor-trafego-criativos"
 
-# Opcional: e-mail de alertas e relatórios (Cloudflare Email Service, com um domínio seu ativado). Sem isto, tudo fica só no painel.
+# Opcional: e-mail de alertas, relatórios e códigos de login (Cloudflare Email Service, com um domínio seu ativado).
+# Sem isto, alertas e relatório ficam só no painel e o código de login sai no log do Worker (npm run tail).
 # [[send_email]]
 # name = "EMAIL"
 
@@ -36,6 +37,11 @@ APP_URL = "https://gestor-trafego-ia.<sua-conta>.workers.dev"
 META_AD_ACCOUNT_ID = "<id da conta de anúncios>"
 META_PAGE_ID = "<id da página do Facebook>"
 META_ADSET_CRIADOR_ID = "<id do conjunto de anúncios de teste>"
+# Meta: eventos do pagamento (API de Conversões). META_DATASET_ID é o id do conjunto de dados (pixel) no Gerenciador de
+# Eventos. Ligue com META_CAPI_ATIVO = "true"; com META_TEST_EVENT_CODE preenchido os eventos vão só para "Eventos de teste".
+META_CAPI_ATIVO = "false"
+META_DATASET_ID = ""
+META_TEST_EVENT_CODE = ""
 # Landing pages: a primeira é o destino dos anúncios novos; as outras são lidas e resumidas (separadas por vírgula).
 CRIADOR_LINK = "https://<seu-site>"
 CRIADOR_PAGINAS = "https://<seu-site>"
@@ -50,6 +56,10 @@ ALERTA_EMAILS = ""
 EMAIL_REMETENTE = "alertas@<seu-dominio>"
 
 # Segredos (npx wrangler secret put NOME):
-#   ADMIN_TOKEN         senha das rotas /admin e do /painel (invente uma longa)
+#   ADMIN_TOKEN         senha das rotas /admin e do /painel?token= (invente uma longa)
+#   LOGIN_SEGREDO       outra senha longa: assina os códigos e as sessões do login por e-mail
+#   WEBHOOK_TOKEN       senha que o seu sistema de pagamento manda em ?token= no webhook
+#   PAGAMENTO_TOKEN     chave de LEITURA da plataforma de pagamento, só quando o webhook não traz os dados (Iugu, Asaas)
 #   META_ADS_TOKEN      token de usuário do sistema da Meta com ads_read e ads_management
+#   META_CAPI_TOKEN     (opcional) token só para os eventos; se vazio, usa META_ADS_TOKEN
 #   OPENROUTER_API_KEY  chave da OpenRouter

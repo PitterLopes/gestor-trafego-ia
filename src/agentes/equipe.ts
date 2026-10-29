@@ -10,6 +10,7 @@ import type { AnalistaEnv } from "./analista_ia.ts";
 import { bloqueio, lerEstado, resumoAcoes, rodarGestor } from "./gestor.ts";
 import type { GestorEnv } from "./gestor.ts";
 import { llmAtivo, resumoLlm } from "./llm.ts";
+import { lerConta } from "../analista.ts";
 import { listarCriativos, rodarCriador } from "./criador.ts";
 import { atualizarPaginas } from "./paginas.ts";
 import { listarAlertas, rodarVigia } from "./vigia.ts";
@@ -20,7 +21,7 @@ import { lerRelatorioAtual, rodarRelator } from "./relator.ts";
 import type { RelatorEnv } from "./relator.ts";
 import { listarPublicos, rodarPublicos } from "./publicos.ts";
 import type { PublicosEnv } from "./publicos.ts";
-import type { CriadorEnv, RenderPng } from "./criador.ts";
+import type { CriadorEnv, RenderPng, RenderWebm } from "./criador.ts";
 
 export type EquipeEnv = AnalistaEnv & GestorEnv & CriadorEnv & VigiaEnv & EstrategistaEnv & RelatorEnv & PublicosEnv;
 
@@ -63,7 +64,7 @@ export async function registrarExecucao(db: D1Database, x: { agente: string; dia
     .run();
 }
 
-export async function rodarEquipe(env: EquipeEnv, gatilho: "cron" | "manual", fetchFn: typeof fetch = fetch, agora = new Date(), renderPng?: RenderPng): Promise<Record<string, unknown>> {
+export async function rodarEquipe(env: EquipeEnv, gatilho: "cron" | "manual", fetchFn: typeof fetch = fetch, agora = new Date(), renderPng?: RenderPng, renderWebm?: RenderWebm): Promise<Record<string, unknown>> {
   const dia = diaBrt(agora);
   const estado = await lerEstado(env.DB);
   const out: Record<string, unknown> = { dia, estado };
@@ -125,7 +126,7 @@ export async function rodarEquipe(env: EquipeEnv, gatilho: "cron" | "manual", fe
     try {
       // landing pages: só as vencidas gastam modelo; erro aqui não impede o criador
       try { out.paginas = await atualizarPaginas(env, fetchFn, agora); } catch (e) { out.paginas = { erro: String(e) }; }
-      const c = await rodarCriador(env, estado.criador?.nivel ?? 0, { renderPng, fetchFn, agora });
+      const c = await rodarCriador(env, estado.criador?.nivel ?? 0, { renderPng, renderWebm, fetchFn, agora });
       if (c.bloqueado) out.criador = { pulado: c.bloqueado };
       else {
         const resumo = `nível ${c.nivel}: ${c.gerados} gerados, ${c.reprovados} reprovados, ${c.publicados} publicados, ${c.erros} erros`;
@@ -161,6 +162,7 @@ export async function painelAgentes(env: EquipeEnv): Promise<Record<string, unkn
   const execucoes = await env.DB.prepare("SELECT id, agente, dia, gatilho, ok, resumo, duracao_ms, criado_em FROM agentes_execucoes ORDER BY id DESC LIMIT 30").all();
   return {
     estado: await lerEstado(env.DB),
+    conta: await lerConta(env.DB, new Date()),
     llm_configurado: llmAtivo(env),
     meta_escrita_configurada: Boolean(env.META_ADS_TOKEN),
     execucoes: execucoes.results,

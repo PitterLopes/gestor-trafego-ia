@@ -27,7 +27,7 @@ export interface PlanoSemana {
   diagnostico: string;
   metas: { custo_cadastro_alvo_cents: number; cadastros_semana: number };
   teto_diario_sugerido_cents: number;
-  angulos: Array<{ angulo: string; motivo: string }>;
+  angulos: Array<{ angulo: string; motivo: string; formato: "imagem" | "video" }>;
   prioridades: string[];
 }
 
@@ -39,7 +39,7 @@ const ESQUEMA_PLANO_SEMANA = {
     diagnostico: { type: "string", description: "3 a 5 frases: o que os 28 dias dizem e o que mudou na última semana." },
     metas: { type: "object", additionalProperties: false, required: ["custo_cadastro_alvo_cents", "cadastros_semana"], properties: { custo_cadastro_alvo_cents: { type: "integer" }, cadastros_semana: { type: "integer" } } },
     teto_diario_sugerido_cents: { type: "integer", description: "Quanto gastar por dia nesta semana, em centavos; nunca acima do teto informado." },
-    angulos: { type: "array", items: { type: "object", additionalProperties: false, required: ["angulo", "motivo"], properties: { angulo: { type: "string" }, motivo: { type: "string" } } } },
+    angulos: { type: "array", items: { type: "object", additionalProperties: false, required: ["angulo", "motivo", "formato"], properties: { angulo: { type: "string" }, motivo: { type: "string" }, formato: { type: "string", enum: ["imagem", "video"], description: "video = chat animado com a conversa acontecendo (Reels); imagem = feed estático" } } } },
     prioridades: { type: "array", items: { type: "string" }, description: "Até 4 frases curtas com o que o Analista deve privilegiar nesta semana." },
   },
 } as const;
@@ -48,7 +48,7 @@ const SISTEMA = `Você é o estrategista de tráfego pago de uma empresa de soft
 - diagnóstico honesto, com números;
 - metas realistas: custo por cadastro alvo (perto do melhor que a conta já fez de forma sustentada) e cadastros esperados na semana com o teto sugerido;
 - teto diário sugerido: igual ou menor que o teto informado; só sugira o máximo se a conta estiver abaixo da média de custo por cadastro por 2 semanas;
-- de 1 a 3 ângulos para criativos novos, cada um com motivo ligado ao que funcionou, ao que não funcionou ou ao que a página promete e o anúncio ainda não usa;
+- de 1 a 3 ângulos para criativos novos, cada um com motivo ligado ao que funcionou, ao que não funcionou ou ao que a página promete e o anúncio ainda não usa, e o formato: "video" (chat animado mostrando a conversa, bom para Reels e para mostrar o produto em uso) ou "imagem";
 - até 4 prioridades para o Analista (ex.: "não aumentar enquanto o custo por cliente não cair", "pausar X se Y").
 Português do Brasil, direto. Não proponha nada fora do que a empresa pode afirmar.`;
 
@@ -59,7 +59,7 @@ export function lerPlanoSemana(v: unknown): PlanoSemana | null {
   const m = v.metas;
   const alvo = Number(m.custo_cadastro_alvo_cents), cad = Number(m.cadastros_semana), teto = Number(v.teto_diario_sugerido_cents);
   if (![alvo, cad, teto].every(Number.isFinite)) return null;
-  const angulos = v.angulos.filter((a): a is { angulo: string; motivo: string } => ehObj(a) && typeof a.angulo === "string" && typeof a.motivo === "string").map((a) => ({ angulo: a.angulo.slice(0, 400), motivo: a.motivo.slice(0, 600) })).slice(0, 3);
+  const angulos = v.angulos.filter((a): a is { angulo: string; motivo: string; formato?: string } => ehObj(a) && typeof a.angulo === "string" && typeof a.motivo === "string").map((a) => ({ angulo: a.angulo.slice(0, 400), motivo: a.motivo.slice(0, 600), formato: (a.formato === "video" ? "video" : "imagem") as "imagem" | "video" })).slice(0, 3);
   return {
     diagnostico: v.diagnostico.slice(0, 2000),
     metas: { custo_cadastro_alvo_cents: Math.max(0, Math.round(alvo)), cadastros_semana: Math.max(0, Math.round(cad)) },
@@ -115,7 +115,7 @@ export async function rodarEstrategista(env: EstrategistaEnv, fetchFn: typeof fe
     .run();
   let pedidos = 0;
   for (const a of plano.angulos.slice(0, ESTRATEGISTA_PEDIDOS_SEMANA)) {
-    await registrarPedido(env.DB, diaBrt(agora), "estrategista", { plataforma: "meta", campanha_id: null, campanha: null, angulo: a.angulo, motivo: `[plano ${semana}] ${a.motivo}` });
+    await registrarPedido(env.DB, diaBrt(agora), "estrategista", { plataforma: "meta", campanha_id: null, campanha: null, angulo: a.angulo, motivo: `[plano ${semana}] ${a.motivo}`, formato: a.formato });
     pedidos += 1;
   }
   return { semana, feito: true, motivo: "plano escrito", plano, pedidos };
