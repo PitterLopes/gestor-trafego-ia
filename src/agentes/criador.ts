@@ -120,6 +120,9 @@ export function verificarPorRegras(c: Copy): Array<{ trecho: string; motivo: str
   return out;
 }
 
+/** Motivos que dizem que NÃO há problema (o modelo lista o trecho mesmo assim). */
+const SEM_PROBLEMA = /\b(sem problema|dentro do permitido|sem reprova|nenhum problema|est[áa] ok|aprovad[oa])\b/i;
+
 export async function verificar(env: CriadorEnv, c: Copy, fetchFn: typeof fetch, agora: Date, pagina = ""): Promise<Verificacao> {
   const regras = verificarPorRegras(c);
   if (regras.length) return { aprovado: false, problemas: regras, por: "regras" };
@@ -137,8 +140,11 @@ export async function verificar(env: CriadorEnv, c: Copy, fetchFn: typeof fetch,
   }, fetchFn, agora);
   // sem modelo, o verificador não aprova sozinho: o criativo fica em sombra para alguém olhar
   if (!r.ok || !ehObj(r.dados) || typeof r.dados.aprovado !== "boolean") return { aprovado: false, problemas: [{ trecho: "", motivo: `verificador indisponível: ${r.ok ? "resposta inválida" : r.erro}` }], por: "modelo" };
-  const problemas = Array.isArray(r.dados.problemas) ? r.dados.problemas.filter((p) => ehObj(p) && typeof p.trecho === "string" && typeof p.motivo === "string").map((p) => ({ trecho: String(p.trecho).slice(0, 200), motivo: String(p.motivo).slice(0, 300) })) : [];
-  return { aprovado: r.dados.aprovado && problemas.length === 0, problemas, por: "regras+modelo" };
+  // o modelo às vezes lista trechos "sem problema" e ainda assim marca aprovado=false: só conta o que é problema de verdade
+  const problemas = Array.isArray(r.dados.problemas)
+    ? r.dados.problemas.filter((p) => ehObj(p) && typeof p.trecho === "string" && typeof p.motivo === "string" && !SEM_PROBLEMA.test(String(p.motivo))).map((p) => ({ trecho: String(p.trecho).slice(0, 200), motivo: String(p.motivo).slice(0, 300) }))
+    : [];
+  return { aprovado: problemas.length === 0, problemas, por: "regras+modelo" };
 }
 
 /** O que a conta já aprendeu (anúncios que funcionam e que não) e a página de destino, para o prompt. */

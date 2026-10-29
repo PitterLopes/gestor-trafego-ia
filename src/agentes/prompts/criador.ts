@@ -39,7 +39,7 @@ export const ESQUEMA_COPY = {
   },
 } as const;
 
-export const SISTEMA_VERIFICADOR = `Você revisa textos de anúncio de uma empresa de software antes de irem ao ar. Recebe a lista do que PODE ser afirmado, a lista do que é PROIBIDO e o texto. Para cada frase, decida se ela está dentro do permitido. Seja rigoroso com promessa de resultado, número inventado, "oficial", superlativo e preço diferente do permitido. Não reprove por estilo. Responda em JSON: aprovado (true só se nenhuma frase tiver problema) e problemas (lista de {trecho, motivo}, vazia quando aprovado).`;
+export const SISTEMA_VERIFICADOR = `Você revisa textos de anúncio de uma empresa de software antes de irem ao ar. Recebe a lista do que PODE ser afirmado, a lista do que é PROIBIDO e o texto. Para cada frase, decida se ela está dentro do permitido. Seja rigoroso com promessa de resultado, número inventado, "oficial", superlativo e preço diferente do permitido. Não reprove por estilo. Responda em JSON: problemas (lista de {trecho, motivo} SÓ com as frases que violam as listas; nunca inclua frases que estão em ordem; lista vazia quando não há nada a reprovar) e aprovado (true exatamente quando a lista de problemas está vazia).`;
 
 export const ESQUEMA_VERIFICACAO = {
   type: "object",

@@ -233,3 +233,15 @@ test("feedback: 'melhorar' gera uma nova versão na hora, ligada à anterior, co
   const velho = sqlite.prepare("SELECT status, feedback FROM ads_criativos WHERE id = 1").get() as Record<string, unknown>;
   assert.deepEqual({ ...velho }, { status: "reprovado", feedback: "título mais curto e preço antes" });
 });
+
+test("verificador: trechos listados como 'sem problema' não reprovam, mesmo com aprovado=false do modelo", async () => {
+  const { env } = banco();
+  const f = fetchFalso({ verificacao: { aprovado: false, problemas: [{ trecho: "x", motivo: "Afirmação dentro do permitido; sem problema." }, { trecho: "y", motivo: "Preço e teste estão dentro do permitido; sem problema." }] } });
+  await registrarPedido(env.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "x", motivo: "m" });
+  const r = await rodarCriador(env, 1, { renderPng: renderFalso, fetchFn: f.fn, agora: AGORA });
+  assert.equal(r.gerados, 1, JSON.stringify(r.detalhes));
+  const g = fetchFalso({ verificacao: { aprovado: true, problemas: [{ trecho: "Dobre suas vendas", motivo: "promessa de resultado" }] } });
+  const { env: env2 } = banco();
+  await registrarPedido(env2.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "x", motivo: "m" });
+  assert.equal((await rodarCriador(env2, 1, { renderPng: renderFalso, fetchFn: g.fn, agora: AGORA })).reprovados, 1, "problema de verdade reprova mesmo com aprovado=true");
+});
