@@ -109,6 +109,27 @@ test("vigia completo: campanha ativa sem gasto ontem e erros do time viram aviso
   assert.equal(v.alertas_novos, 2);
 });
 
+test("vigia: falha já resolvida (o agente rodou bem depois) não vira alerta; a que vale traz o erro do criativo", async () => {
+  const { env, sqlite } = banco();
+  const h = (horas: number) => new Date(AGORA.getTime() - horas * 3600_000).toISOString();
+  // criador falhou há 12 h e rodou bem há 11 h: resolvido
+  sqlite.exec(`INSERT INTO agentes_execucoes (agente, dia, gatilho, ok, resumo, duracao_ms, criado_em) VALUES ('criador', '2026-10-29', 'manual', 0, 'nível 1: 0 gerados, 1 erros', 1, '${h(12)}'), ('criador', '2026-10-29', 'manual', 1, 'nível 1: 1 gerados', 1, '${h(11)}')`);
+  await rodarVigia(env, "completo", 2, metaVigia({}), AGORA);
+  assert.equal((sqlite.prepare("SELECT COUNT(*) AS n FROM alertas WHERE chave LIKE 'erro:%'").get() as { n: number }).n, 0, "falha resolvida não avisa");
+  // gestor falhou duas vezes e não rodou bem depois: um alerta só, com a hora
+  sqlite.exec(`INSERT INTO agentes_execucoes (agente, dia, gatilho, ok, resumo, duracao_ms, criado_em) VALUES ('gestor', '2026-10-29', 'cron', 0, 'meta: HTTP 500', 1, '${h(3)}'), ('gestor', '2026-10-29', 'cron', 0, 'meta: HTTP 503', 1, '${h(2)}')`);
+  // e o criador falha de novo, agora com o motivo gravado no criativo
+  sqlite.exec(`INSERT INTO ads_criativos (dia, pedido_id, plataforma, angulo, modelo, copy_json, verificacao_json, status, resposta, criado_em) VALUES ('2026-10-29', 1, 'meta', 'x', 'm', '{}', '{}', 'erro', 'render: TimeoutError: Navigation timeout', '${h(1.05)}')`);
+  sqlite.exec(`INSERT INTO agentes_execucoes (agente, dia, gatilho, ok, resumo, duracao_ms, criado_em) VALUES ('criador', '2026-10-29', 'cron', 0, 'nível 2: 0 gerados, 1 erros', 1, '${h(1)}')`);
+  sqlite.exec("DELETE FROM alertas");
+  await rodarVigia(env, "completo", 2, metaVigia({}), AGORA);
+  const al = sqlite.prepare("SELECT chave, texto FROM alertas WHERE chave LIKE 'erro:%' ORDER BY chave").all() as Array<{ chave: string; texto: string }>;
+  assert.deepEqual(al.map((a) => a.chave), ["erro:criador", "erro:gestor"]);
+  assert.match(al[0].texto, /Última rodada \(\d{2}\/\d{2}, \d{2}:\d{2}\)/);
+  assert.match(al[0].texto, /criativo nº \d+: render: TimeoutError/);
+  assert.match(al[1].texto, /HTTP 503/, "a falha mais recente do gestor");
+});
+
 test("rodarVigiaHorario executa as pausas pelo Gestor na hora", async () => {
   const { env, sqlite } = banco();
   await semear(env);

@@ -156,14 +156,34 @@ export async function rodarVigia(env: VigiaEnv, modo: "horario" | "completo", ni
       if (!g || n(g.gasto_cents) === 0) await novo({ chave: `sem_gasto:${c.campanha_id}`, gravidade: "aviso", titulo: `Campanha ativa sem gasto ontem: ${c.campanha}`, texto: "Pode ser entrega travada, cobrança recusada, anúncio em análise ou orçamento no conjunto. Vale abrir o Gerenciador.", acao: null });
     }
     // 4. erros do time nas últimas 24 h
-    const erros = await env.DB.prepare("SELECT agente, resumo FROM agentes_execucoes WHERE ok = 0 AND criado_em >= ?1 ORDER BY id DESC LIMIT 5").bind(new Date(agora.getTime() - 86_400_000).toISOString()).all<{ agente: string; resumo: string }>();
-    for (const e of erros.results) await novo({ chave: `erro:${e.agente}`, gravidade: "aviso", titulo: `O agente ${e.agente} falhou`, texto: e.resumo.slice(0, 500), acao: null });
+    // só a falha que ainda vale: a última rodada daquele agente falhou (se ele rodou bem depois, já se resolveu)
+    const erros = await env.DB.prepare(
+      `SELECT e.agente, e.resumo, e.criado_em FROM agentes_execucoes e
+        WHERE e.ok = 0 AND e.criado_em >= ?1
+          AND NOT EXISTS (SELECT 1 FROM agentes_execucoes d WHERE d.agente = e.agente AND d.ok = 1 AND d.id > e.id)
+        ORDER BY e.id DESC LIMIT 5`,
+    ).bind(new Date(agora.getTime() - 86_400_000).toISOString()).all<{ agente: string; resumo: string; criado_em: string }>();
+    const vistos = new Set<string>();
+    for (const e of erros.results) {
+      if (vistos.has(e.agente)) continue;
+      vistos.add(e.agente);
+      const quando = new Date(e.criado_em).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+      await novo({ chave: `erro:${e.agente}`, gravidade: "aviso", titulo: `O agente ${e.agente} falhou`, texto: `Última rodada (${quando}): ${e.resumo}${await detalheDoErro(env.DB, e.agente, e.criado_em)}`.slice(0, 700), acao: null });
+    }
     const acoesErro = await env.DB.prepare("SELECT id, alvo_nome, tipo, resposta FROM ads_acoes WHERE status = 'erro' AND criado_em >= ?1 ORDER BY id DESC LIMIT 5").bind(new Date(agora.getTime() - 86_400_000).toISOString()).all<{ id: number; alvo_nome: string | null; tipo: string; resposta: string | null }>();
     for (const a of acoesErro.results) await novo({ chave: `acao_erro:${a.id}`, gravidade: "aviso", titulo: `A Meta recusou a ação "${a.tipo}" em ${a.alvo_nome ?? "?"}`, texto: a.resposta ?? "", acao: null });
   }
 
   try { out.enviados = await enviarAlertas(env, dia); } catch (e) { out.erros.push(`e-mail: ${String(e)}`); }
   return out;
+}
+
+/** O que de fato falhou, quando o resumo da rodada só traz contagens (ex.: o Criador diz "1 erros"). */
+async function detalheDoErro(db: D1Database, agente: string, quando: string): Promise<string> {
+  if (agente !== "criador") return "";
+  const de = new Date(Date.parse(quando) - 15 * 60_000).toISOString();
+  const r = await db.prepare("SELECT id, resposta FROM ads_criativos WHERE status = 'erro' AND criado_em >= ?1 AND criado_em <= ?2 ORDER BY id DESC LIMIT 1").bind(de, quando).first<{ id: number; resposta: string | null }>();
+  return r?.resposta ? ` · criativo nº ${r.id}: ${r.resposta.slice(0, 300)}` : "";
 }
 
 export async function listarAlertas(db: D1Database, dias = 14): Promise<Array<Record<string, unknown>>> {
