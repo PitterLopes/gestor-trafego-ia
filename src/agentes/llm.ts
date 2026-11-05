@@ -26,6 +26,8 @@ export interface PedidoLlm {
   modeloReserva?: string;
   sistema: string;
   usuario: string;
+  /** Imagens que o modelo vê junto com o texto (data URL ou https). Só o texto vai para o registro. */
+  imagens?: string[];
   /** JSON Schema da resposta (strict). */
   esquema: Record<string, unknown>;
   nomeEsquema: string;
@@ -84,7 +86,7 @@ async function umaChamada<T>(env: LlmEnv, p: PedidoLlm, modelo: string, fetchFn:
     model: modelo,
     messages: [
       { role: "system", content: p.sistema },
-      { role: "user", content: p.usuario },
+      { role: "user", content: p.imagens?.length ? [{ type: "text", text: p.usuario }, ...p.imagens.map((url) => ({ type: "image_url", image_url: { url } }))] : p.usuario },
     ],
     temperature: p.temperatura ?? 0.2,
     max_tokens: p.maxTokens ?? 4000,

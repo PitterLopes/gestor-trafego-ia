@@ -91,11 +91,15 @@ Se ela não tem landing page: ofereça escrever uma página simples (HTML estát
 
 Depois: `POST /admin/paginas/atualizar` para o Criador ler a página.
 
+**Tela do produto (para os vídeos).** O vídeo do Criador mostra a conversa acontecendo numa imitação da tela de atendimento do produto dela, não num balão de WhatsApp. Peça um print da tela de chat/atendimento do sistema dela e preencha `TELA_PRODUTO` em `src/config/negocio.ts`: endereço que aparece na barra, itens do menu lateral (com o ativo marcado), abas e contadores, nomes inventados na lista de conversas, botões do cabeçalho, texto do campo de digitação, texto do botão e unidade do preço, e as cores da marca. Gere uma prévia (`POST /admin/criativos/pedir?angulo=...&formato=video` e `POST /admin/criativos/pedidos/<id>/gerar?nivel=1`) e mostre os dois vídeos no painel antes de seguir: ela compara com o print e diz o que não está igual.
+
 ## Fase 5 · Painel
 
 Já está no ar desde a fase 1. Agora, com pagamento e Meta ligados, abra `/painel` com ela e passe cartão por cartão: Negócio, Funil dos anúncios, Agentes, Criativos (explique os botões: publicar, reprovar, gerar nova versão com o pedido dela), Plano, Relatório, Alertas, Eventos, Pagamento. Convide os outros usuários (`/auth/usuarios` no painel, ou `POST /admin/usuarios`).
 
 ## Fase 6 · Time em sombra
+
+**Como o Criador escolhe o que fazer (explique a ela).** Ele não inventa ideia do zero: toda variação parte de um anúncio da conta que traz cadastro (lead) com confiança (pelo menos R$ 150 gastos e 5 cadastros em 28 dias, custo por cadastro no máximo 1,5× a média da conta). A **pasta de referência** guarda os 2 anúncios com mais cadastros: o sistema baixa a imagem grande da Meta e um modelo que vê a imagem anota o que aparece, o que prende e as variações sugeridas. O Analista e o Estrategista leem essa pasta e cada pedido aponta o `anuncio_base`; o Criador recebe a imagem e a análise. Pedido de agente sem anúncio que converta fica esperando; pedido dela segue. Para fixar na pasta um anúncio que ela considera modelo (ex.: um print do produto que ela quer em vídeo), `POST /admin/criativos/referencias/<id do anúncio>`; para ver a pasta, `GET /admin/criativos/referencias`; para montar agora, `POST /admin/criativos/referencias/atualizar`. Vídeo sai em dois arquivos, **1:1 para o feed e 9:16 para stories e reels com o conteúdo centralizado** (o quadro 1:1 no meio, para a legenda e os botões do Reels não cobrirem nada), e publica num anúncio só, um por posicionamento.
 
 `POST /admin/agentes/rodar`. Mostre o `resumo` do Analista, o plano do Estrategista e o primeiro criativo (peça um à mão se não houver pedido: `POST /admin/criativos/pedir?angulo=...` e, para vídeo, `&formato=video`; para atender na hora, fora do ritmo e em sombra: `POST /admin/criativos/pedidos/<id>/gerar?nivel=1`). Diga com todas as letras: **nada foi executado na Meta**; analista e gestor estão em sombra (nível 1), criador em 0, vigia/estrategista/relator em 2 (só leem, planejam e escrevem), públicos em 1 (só conta).
 
@@ -120,6 +124,9 @@ Termine com um resumo escrito para ela guardar: o endereço do painel e de `/ent
 - Vídeo com `MediaRecorder sem WebM` ou `o navegador não entregou o vídeo`: o Browser Rendering da conta não gravou; o pedido fica com erro e o Criador segue com imagens. Reporte.
 - `HTTP 403` da Meta ao executar: o token não tem `ads_management` ou o usuário do sistema não tem "Gerenciar campanhas" na conta. Nos eventos: o conjunto de dados não está atribuído ao usuário do sistema.
 - "A conta de anúncios não tem acesso à conta do Instagram" (1815199) ao publicar um criativo: faltou a fase 3, passos 2 e 2b (página e Instagram no usuário do sistema; conta de anúncios conectada ao perfil).
+- A pasta de referência fica vazia: nenhum anúncio passou do mínimo de gasto e cadastros em 28 dias (biblioteca.ts). Pedidos dos agentes esperam; fixe um à mão ou peça direto.
+- Análise da referência com "Reasoning is mandatory": o modelo com imagem exige raciocínio ligado (já está em `raciocinio: "low"`); se trocar o modelo, mantenha.
+- Publicar vídeo com erro no `asset_feed_spec` (dois formatos): a Meta mudou as posições aceitas em `asset_customization_rules`; ajuste `specDoisFormatos` em `src/agentes/criador.ts` com o nome que o erro citar.
 - "O criativo não deve incluir aprimoramentos padrão" (3858504): a Meta mudou a lista de recursos; ajuste `APRIMORAMENTOS_DESLIGADOS` em `src/agentes/criador.ts` (a mensagem de erro diz qual nome ela não aceita).
 - A Meta "não encontra" cadastros: confira em `src/anuncios.ts` quais `action_type` contam como cadastro para a conta dela.
 - Webhook chega com erro no painel (cartão Pagamento): veja o `erro` em `GET /admin/ingestao`; quase sempre é `PAGAMENTO_TOKEN` faltando (Iugu/Asaas) ou evento não marcado na plataforma.

@@ -22,8 +22,10 @@ import type { RelatorEnv } from "./relator.ts";
 import { listarPublicos, rodarPublicos } from "./publicos.ts";
 import type { PublicosEnv } from "./publicos.ts";
 import type { CriadorEnv, RenderPng, RenderWebm } from "./criador.ts";
+import { atualizarReferencias } from "./referencia.ts";
+import type { ReferenciaEnv } from "./referencia.ts";
 
-export type EquipeEnv = AnalistaEnv & GestorEnv & CriadorEnv & VigiaEnv & EstrategistaEnv & RelatorEnv & PublicosEnv;
+export type EquipeEnv = AnalistaEnv & GestorEnv & CriadorEnv & VigiaEnv & EstrategistaEnv & RelatorEnv & PublicosEnv & ReferenciaEnv;
 
 /** Segunda-feira em Brasília: dia do Estrategista, do Relator e dos Públicos. */
 export function ehSegunda(agora: Date): boolean {
@@ -75,6 +77,15 @@ export async function rodarEquipe(env: EquipeEnv, gatilho: "cron" | "manual", fe
   out.vigia = bloqV ? { pulado: bloqV } : await passo(env, "vigia", dia, gatilho, async () => {
     const v = await rodarVigia(env, "completo", estado.vigia?.nivel ?? 0, fetchFn, agora);
     return { ok: v.erros.length === 0, resumo: `${v.alertas_novos} alertas novos, ${v.enviados} enviados, ${v.pausas_enfileiradas} pausas${v.erros.length ? ` · erros: ${v.erros.join("; ")}` : ""}`, detalhes: v };
+  });
+
+  // Pasta de referência: baixa e analisa os anúncios que mais trazem cadastro (só lê a Meta; o modelo só roda
+  // quando a imagem muda). Vem antes do Estrategista e do Analista, que pedem variações a partir dela.
+  if (bloqueio(estado, "analista")) out.referencia = { pulado: bloqueio(estado, "analista") };
+  else if (!llmAtivo(env) || !env.CRIATIVOS || !env.META_ADS_TOKEN) out.referencia = { pulado: "falta OPENROUTER_API_KEY, R2 CRIATIVOS ou META_ADS_TOKEN" };
+  else out.referencia = await passo(env, "referencia", dia, gatilho, async () => {
+    const r = await atualizarReferencias(env, fetchFn, agora);
+    return { ok: r.erros.length === 0, resumo: `${r.referencias.length} na pasta: ${r.referencias.map((x) => `${x.anuncio} (${x.cadastros_28d} cadastros)`).join(", ")}${r.erros.length ? ` · erros: ${r.erros.join("; ")}` : ""}`, detalhes: r.referencias.map((x) => ({ anuncio_id: x.anuncio_id, anuncio: x.anuncio, imagem: x.imagem_chave, analisado: Boolean(x.analise), erro: x.erro })) };
   });
 
   // Estrategista: plano da semana (segunda, ou quando a semana não tem plano)

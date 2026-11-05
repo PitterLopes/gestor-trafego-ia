@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { anunciosDaMeta, gravarAnuncios, linhasAnuncioDaMeta } from "../src/anuncios.ts";
-import { bibliotecaParaModelo, montarBiblioteca } from "../src/agentes/biblioteca.ts";
+import { BASE_CPL_MAX_FATOR, basesQueConvertem, bibliotecaParaModelo, montarBiblioteca } from "../src/agentes/biblioteca.ts";
+import type { AnuncioReferencia } from "../src/agentes/biblioteca.ts";
 import { atualizarPaginas, extrairTexto, paginaParaModelo, urlsConfiguradas } from "../src/agentes/paginas.ts";
 import { contextoDoCriador } from "../src/agentes/criador.ts";
 
@@ -30,7 +31,7 @@ function d1Falso(db: DatabaseSync): D1Database {
 }
 function banco(): { db: D1Database; sqlite: DatabaseSync } {
   const sqlite = new DatabaseSync(":memory:");
-  for (const m of ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql", "0008_negocio.sql", "0009_feedback_video.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8"));
+  for (const m of ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql", "0008_negocio.sql", "0009_feedback_video.sql", "0010_referencia.sql", "0011_video_story.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8"));
   return { db: d1Falso(sqlite), sqlite };
 }
 const AGORA = new Date("2026-10-29T15:00:00Z");
@@ -73,7 +74,7 @@ test("biblioteca: melhores por custo por cadastro, piores sem cadastro, mínimo 
   const b2 = await montarBiblioteca(db, AGORA);
   assert.equal(b2.do_criador.map((a) => a.anuncio_id).join(","), "a2");
   assert.match(bibliotecaParaModelo(b2), /CRIATIVOS ANTERIORES DO CRIADOR/);
-  assert.equal(bibliotecaParaModelo({ melhores: [], piores: [], do_criador: [], media_conta_cents: null }), "");
+  assert.equal(bibliotecaParaModelo({ melhores: [], piores: [], do_criador: [], media_conta_cents: null, bases: [] }), "");
 });
 
 test("extrairTexto tira script, tags e entidades e mantém título e descrição", () => {
@@ -121,4 +122,43 @@ test("atualizarPaginas: resume com o modelo, não repete página igual, renova d
   assert.match(ctx.pagina, /Promessa: Um número para a empresa/);
   assert.equal(ctx.biblioteca, "");
   assert.equal(paginaParaModelo(undefined), "");
+});
+
+const ref = (id: string, gasto: number, leads: number, texto: string | null = "texto"): AnuncioReferencia => ({ anuncio_id: id, anuncio: id, status: "ACTIVE", titulo: null, texto, gasto_28d: gasto, cadastros_28d: leads, custo_cadastro_cents: leads > 0 ? Math.round(gasto / leads) : null, gerado_pelo_criador: false });
+
+test("basesQueConvertem: só lead com confiança (gasto e cadastros mínimos), texto para variar e custo perto da média", () => {
+  const media = 3000;
+  const bases = basesQueConvertem([
+    ref("barato", 260_000, 140),          // R$ 18,57
+    ref("medio", 86_000, 28),             // R$ 30,71
+    ref("sorte", 6_000, 6),               // gasto abaixo do mínimo
+    ref("poucos", 20_000, 2),             // 2 cadastros: sorte
+    ref("caro", 100_000, 5),              // R$ 200 por cadastro: acima de 1,5× a média
+    ref("zero", 90_000, 0),               // sem lead
+    ref("sem_texto", 200_000, 50, null),  // nada para variar
+  ], media);
+  assert.deepEqual(bases.map((a) => a.anuncio_id), ["barato", "medio"]);
+  assert.ok(bases.every((a) => a.custo_cadastro_cents! <= media * BASE_CPL_MAX_FATOR));
+  assert.deepEqual(basesQueConvertem([ref("a", 20_000, 5), ref("b", 40_000, 10)], null).map((a) => a.anuncio_id), ["b", "a"], "empate no custo: mais cadastros primeiro");
+});
+
+test("montarBiblioteca: bases numa conta de exemplo (campeão, segundo, pouco gasto e sem cadastro)", async () => {
+  const { db } = banco();
+  const anuncios = [
+    ["900000000000000001", "Campeao_4x5", 260_500, 143],
+    ["900000000000000002", "PrintPreco_4x5_Cta", 86_000, 28],
+    ["900000000000000003", "Anuncio em Reels", 18_200, 7],
+    ["900000000000000004", "Campeao_4x5 — Cópia", 5_500, 7],
+    ["900000000000000005", "SetorStatus_4x5", 9_500, 2],
+    ["900000000000000006", "PrintPreco_4x5", 19_800, 1],
+    ["900000000000000007", "Ad antigo sem cadastro", 6_600, 0],
+  ] as const;
+  await gravarAnuncios(db, anuncios.map(([id, nome]) => ({ plataforma: "meta" as const, anuncio_id: id, anuncio: nome, campanha_id: "C", conjunto_id: "S", status: "ACTIVE", creative_id: null, titulo: null, texto: `texto de ${nome}`, descricao: null, imagem_url: null })),
+    anuncios.map(([id, , gasto, leads]) => ({ dia: "2026-11-01", plataforma: "meta" as const, anuncio_id: id, gasto_cents: gasto, impressoes: 0, cliques: 0, resultados: leads })));
+  const b = await montarBiblioteca(db, new Date("2026-11-05T15:00:00Z"));
+  assert.deepEqual(b.bases.map((a) => [a.anuncio, a.custo_cadastro_cents]), [
+    ["Campeao_4x5", 1822],
+    ["Anuncio em Reels", 2600],
+    ["PrintPreco_4x5_Cta", 3071],
+  ]);
 });

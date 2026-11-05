@@ -17,7 +17,7 @@ Como decidir:
 - Manter: na dúvida, manter. Mudança reinicia o aprendizado da plataforma; respeite a frequência mínima entre mudanças na mesma campanha.
 - Nunca proponha ação em campanha pausada, exceto "ativar" quando houver motivo claro e orçamento dentro do teto.
 - Se faltar dado (poucos dias, poucos cadastros), diga isso no motivo e mantenha.
-- Se vir sinal de fadiga (custo por cadastro subindo por 7 dias com gasto estável), peça criativo novo em pedidos_criativo, com o ângulo que você sugere e por quê.
+- Se vir sinal de fadiga (custo por cadastro subindo por 7 dias com gasto estável), peça criativo novo em pedidos_criativo. Cada pedido é uma variação de um anúncio da PASTA DE REFERÊNCIA (os que mais trazem cadastro, com a imagem analisada): aponte o anuncio_base, escolha o formato e diga no ângulo o que mudar (abertura, formato, detalhe), não uma ideia do zero. Tela de chat que converte pede também a versão em vídeo.
 
 Escreva motivos curtos, em português do Brasil, com os números que usou. Sem adjetivos.
 
@@ -49,10 +49,12 @@ export const ESQUEMA_PLANO = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["campanha_id", "angulo", "motivo"],
+        required: ["campanha_id", "anuncio_base", "formato", "angulo", "motivo"],
         properties: {
           campanha_id: { type: "string" },
-          angulo: { type: "string", description: "A ideia central do anúncio novo, em uma frase." },
+          anuncio_base: { type: "string", description: "O anuncio_base da PASTA DE REFERÊNCIA que esta variação segue." },
+          formato: { type: "string", enum: ["imagem", "video"] },
+          angulo: { type: "string", description: "O que muda em relação ao anúncio base, em uma frase." },
           motivo: { type: "string" },
         },
       },

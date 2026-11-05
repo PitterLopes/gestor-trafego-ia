@@ -45,7 +45,7 @@
 
 ## Tabelas (`migrations/`)
 
-`clientes`, `pagamentos`, `leads`, `meta_eventos`, `ingestao_log`, `usuarios`, `login_*` (o negócio) · `ads_gasto_diario`, `ads_campanhas`, `ads_anuncios`, `ads_anuncio_diario` (a plataforma) · `ads_decisoes` (regras) · `agentes_estado`, `ads_acoes`, `llm_chamadas`, `agentes_execucoes` (o time) · `ads_pedidos_criativo`, `ads_criativos`, `paginas_resumo` (o Criador, com formato, feedback e versões) · `alertas`, `ads_planos`, `relatorios`, `ads_publicos`.
+`clientes`, `pagamentos`, `leads`, `meta_eventos`, `ingestao_log`, `usuarios`, `login_*` (o negócio) · `ads_gasto_diario`, `ads_campanhas`, `ads_anuncios`, `ads_anuncio_diario` (a plataforma) · `ads_decisoes` (regras) · `agentes_estado`, `ads_acoes`, `llm_chamadas`, `agentes_execucoes` (o time) · `ads_pedidos_criativo`, `ads_criativos`, `paginas_resumo` (o Criador, com formato, feedback, versões, anúncio base e o vídeo 9:16) · R2 `referencia/` (a pasta de referência: imagem e análise dos anúncios que trazem cadastro) · `alertas`, `ads_planos`, `relatorios`, `ads_publicos`.
 
 ## Limites (o que o modelo não consegue contornar)
 

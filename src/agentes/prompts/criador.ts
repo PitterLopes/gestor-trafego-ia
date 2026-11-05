@@ -6,9 +6,9 @@
 export { AFIRMACOES_PERMITIDAS, PROIBIDO } from "../../config/negocio.ts";
 import { PRECO_LINHA } from "../../config/negocio.ts";
 
-export const SISTEMA_CRIADOR = `Você escreve anúncios para a Meta (imagem 4:5 para o feed, ou vídeo 9:16 com um chat animado para o Reels) para a empresa descrita abaixo. Português do Brasil, direto, sem adjetivos vazios. O leitor é o cliente descrito no perfil da empresa.
+export const SISTEMA_CRIADOR = `Você escreve anúncios para a Meta (imagem 4:5 para o feed, ou vídeo com um chat animado na tela do produto, em 1:1 e 9:16) para a empresa descrita abaixo. Português do Brasil, direto, sem adjetivos vazios. O leitor é o cliente descrito no perfil da empresa.
 
-Você recebe o ÂNGULO (a ideia central, escolhida pelo analista), o perfil da empresa, a lista do que PODE ser afirmado e do que é PROIBIDO. Tudo o que você escrever tem que caber na lista do que pode; qualquer coisa fora dela é cortada por um verificador e o anúncio não sai.
+Você recebe o ANÚNCIO BASE (o anúncio da conta que mais traz cadastro pelo menor custo: sua copy é uma variação dele), o ÂNGULO (o que variar, escolhido pelo analista), o perfil da empresa, a lista do que PODE ser afirmado e do que é PROIBIDO. Tudo o que você escrever tem que caber na lista do que pode; qualquer coisa fora dela é cortada por um verificador e o anúncio não sai.
 
 Escreva em JSON, conforme o esquema:
 - nome: nome interno do anúncio, curto, sem espaços no começo (ex.: "SetorCerto_4x5").
@@ -17,15 +17,15 @@ Escreva em JSON, conforme o esquema:
 - texto_primario: o texto do post, 2 a 4 linhas curtas, até 320 caracteres; termina com "${PRECO_LINHA}."
 - headline: título do link, até 40 caracteres.
 - descricao: até 30 caracteres.
-- conversa: só quando o FORMATO for "video": de 6 a 9 mensagens curtas (até 70 caracteres cada) entre "cliente" e "atendente", mostrando o problema de antes virando a solução que a empresa oferece (só o que está em PODE AFIRMAR). Nomes e situações fictícios, verossímeis, sem dados reais. Quando o formato for "imagem", devolva conversa como lista vazia.
-- setor: só para vídeo: o cabeçalho do chat (ex.: "Suporte · Empresa"); atendente: quem responde (ex.: "Ana · Suporte"). Vazios no formato imagem.
+- conversa: só quando o FORMATO for "video": de 5 a 8 mensagens (até 90 caracteres cada) dentro da TELA DE CHAT DO PRODUTO (o sistema da empresa, com lista de conversas, protocolo e setor; não é o WhatsApp). "cliente" é quem escreve, "atendente" é quem responde pelo sistema e "evento" é um aviso do sistema no meio da conversa (ex.: "Ana transferiu para Financeiro"; use no máximo 1). Mostre o problema de antes virando a solução que a empresa oferece (só o que está em PODE AFIRMAR). Nomes e situações fictícios, verossímeis, sem dados reais. Quando o formato for "imagem", devolva conversa como lista vazia.
+- setor: só para vídeo: o setor da conversa (ex.: "Suporte"); atendente: o primeiro nome de quem responde (ex.: "Ana"); contato: o nome do cliente como aparece na lista de conversas (ex.: "Marcos Padaria"). Vazios no formato imagem.
 
 Regras: uma ideia por anúncio; a dor antes da solução; nada do que está em PROIBIDO; preço só como está na lista; sem emoji na imagem.`;
 
 export const ESQUEMA_COPY = {
   type: "object",
   additionalProperties: false,
-  required: ["nome", "titulo_imagem", "promessa", "texto_primario", "headline", "descricao", "conversa", "setor", "atendente"],
+  required: ["nome", "titulo_imagem", "promessa", "texto_primario", "headline", "descricao", "conversa", "setor", "atendente", "contato"],
   properties: {
     nome: { type: "string" },
     titulo_imagem: { type: "string" },
@@ -33,9 +33,10 @@ export const ESQUEMA_COPY = {
     texto_primario: { type: "string" },
     headline: { type: "string" },
     descricao: { type: "string" },
-    conversa: { type: "array", items: { type: "object", additionalProperties: false, required: ["de", "texto"], properties: { de: { type: "string", enum: ["cliente", "atendente"] }, texto: { type: "string" } } } },
+    conversa: { type: "array", items: { type: "object", additionalProperties: false, required: ["de", "texto"], properties: { de: { type: "string", enum: ["cliente", "atendente", "evento"] }, texto: { type: "string" } } } },
     setor: { type: "string" },
     atendente: { type: "string" },
+    contato: { type: "string" },
   },
 } as const;
 

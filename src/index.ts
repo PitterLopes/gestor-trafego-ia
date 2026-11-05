@@ -10,13 +10,14 @@
  *   GET  /entrar · /auth/*                          login por e-mail + código
  * Painel (sessão, ou ?token=ADMIN_TOKEN):
  *   GET  /painel                                   negócio, time, criativos (com aprovação), plano, relatório, alertas
- *   GET  /painel/criativos/<id>.png|.webm|-capa.png
+ *   GET  /painel/criativos/<id>.png|.webm|-capa.png|-story.webm|-story-capa.png
  *   POST /painel/criativos/<id>/(publicar|reprovar|melhorar)   formulário do painel
  * Administração (Authorization: Bearer ADMIN_TOKEN):
  *   POST /admin/anuncios/varrer[?dias=7] · GET /admin/anuncios · GET /admin/analista · POST /admin/analista/rodar
  *   GET  /admin/agentes · /dossie · POST /admin/agentes/rodar · PUT /admin/agentes/estado?agente=&nivel=&parado=
  *   POST /admin/agentes/vigia · /estrategista[?forcar=1] · /relator[?forcar=1] · /publicos
- *   POST /admin/criativos/pedir?angulo=&formato=imagem|video · POST /admin/criativos/pedidos/<id>/gerar[?nivel=1]
+ *   POST /admin/criativos/pedir?angulo=&formato=imagem|video[&base=<id do anúncio>] · POST /admin/criativos/pedidos/<id>/gerar[?nivel=1]
+ *   GET  /admin/criativos/referencias · POST …/referencias/atualizar[?forcar=1] · POST|DELETE …/referencias/<id> · GET …/referencias/<id>.jpg
  *   GET  /admin/criativos/<id>.png|.webm · /biblioteca
  *   POST /admin/criativos/<id>/(publicar|reprovar|melhorar)
  *   GET  /admin/paginas · POST /admin/paginas/atualizar[?forcar=1]
@@ -33,6 +34,7 @@ import { painelAgentes, rodarEquipe, rodarVigiaHorario } from "./agentes/equipe.
 import { gravarEstado, lerEstado } from "./agentes/gestor.ts";
 import { montarDossie } from "./agentes/dossie.ts";
 import { acaoCriativo, contextoDoCriador, registrarPedido, rodarCriador } from "./agentes/criador.ts";
+import { atualizarReferencias, lerIndice, referenciaManual, removerReferenciaManual } from "./agentes/referencia.ts";
 import type { AcaoCriativo } from "./agentes/criador.ts";
 import { montarBiblioteca } from "./agentes/biblioteca.ts";
 import { atualizarPaginas, lerResumos } from "./agentes/paginas.ts";
@@ -133,7 +135,27 @@ async function admin(path: string, request: Request, url: URL, env: Env): Promis
   if (path === "/admin/criativos/pedir" && method === "POST") {
     const angulo = (url.searchParams.get("angulo") ?? "").trim();
     if (angulo.length < 10) throw new HttpError(400, "informe ?angulo=<a ideia do anúncio, em uma frase>[&formato=video]");
-    return json({ ok: true, pedido: await registrarPedido(env.DB, diaBrt(new Date()), "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo, motivo: url.searchParams.get("motivo") ?? "pedido manual", formato: url.searchParams.get("formato") === "video" ? "video" : "imagem" }) });
+    // ?base=<id do anúncio na Meta>: a variação segue aquele anúncio (ex.: transformar um print da tela em vídeo)
+    const base = (url.searchParams.get("base") ?? "").trim() || null;
+    if (base && !/^\d{6,30}$/.test(base)) throw new HttpError(400, "base deve ser o id do anúncio na Meta");
+    return json({ ok: true, pedido: await registrarPedido(env.DB, diaBrt(new Date()), "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo, motivo: url.searchParams.get("motivo") ?? "pedido manual", formato: url.searchParams.get("formato") === "video" ? "video" : "imagem", anuncio_base: base }) });
+  }
+  // Pasta de referência: os anúncios que mais trazem cadastro (e os fixados à mão), com imagem e análise no R2
+  if (path === "/admin/criativos/referencias" && method === "GET") return json(await lerIndice(env));
+  if (path === "/admin/criativos/referencias/atualizar" && method === "POST") return json(await atualizarReferencias(env, fetch, new Date(), url.searchParams.get("forcar") === "1"));
+  const refManual = /^\/admin\/criativos\/referencias\/(\d{6,30})$/.exec(path);
+  if (refManual && method === "DELETE") return json({ ok: await removerReferenciaManual(env, refManual[1]) });
+  if (refManual && method === "POST") {
+    const r = await referenciaManual(env, refManual[1]);
+    if (!r) throw new HttpError(404, "anúncio não encontrado em ads_anuncios (rode a coleta antes)");
+    return json(r);
+  }
+  const refImg = /^\/admin\/criativos\/referencias\/(\d{6,30})\.(jpg|png|webp)$/.exec(path);
+  if (refImg && method === "GET") {
+    if (!env.CRIATIVOS) throw new HttpError(503, "R2 CRIATIVOS não configurado");
+    const obj = await env.CRIATIVOS.get(`referencia/${refImg[1]}.${refImg[2]}`);
+    if (!obj) throw new HttpError(404, "imagem não encontrada");
+    return new Response(obj.body, { headers: { "content-type": refImg[2] === "jpg" ? "image/jpeg" : `image/${refImg[2]}`, "cache-control": "private, max-age=300" } });
   }
   const gerar = /^\/admin\/criativos\/pedidos\/(\d+)\/gerar$/.exec(path);
   if (gerar && method === "POST") {
@@ -171,7 +193,7 @@ async function admin(path: string, request: Request, url: URL, env: Env): Promis
     await criarUsuario(env.DB, { email, nome, papel: c.papel === "leitor" ? "leitor" : "admin", por: "token de administrador" });
     return json({ ok: true, usuarios: await listarUsuarios(env.DB) });
   }
-  const midia = /^\/admin\/criativos\/(\d+)(-capa)?\.(png|webm)$/.exec(path);
+  const midia = /^\/admin\/criativos\/(\d+)((?:-story)?(?:-capa)?)\.(png|webm)$/.exec(path);
   if (midia && method === "GET") return midiaCriativo(env, midia[1], midia[2] ?? "", midia[3]);
   throw new HttpError(404, "não encontrado");
 }
@@ -227,7 +249,7 @@ export default {
           const extras = { eventos: await resumoEventos(env.DB), eventos_ativos: eventosAtivos(env), ingestao: await resumoIngestao(env.DB) };
           return new Response(paginaPainel(p, m, extras, quem, q), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
         }
-        const midia = /^\/painel\/criativos\/(\d+)(-capa)?\.(png|webm)$/.exec(path);
+        const midia = /^\/painel\/criativos\/(\d+)((?:-story)?(?:-capa)?)\.(png|webm)$/.exec(path);
         if (midia && request.method === "GET") return midiaCriativo(env, midia[1], midia[2] ?? "", midia[3]);
         const acao = /^\/painel\/criativos\/(\d+)\/(publicar|reprovar|melhorar)$/.exec(path);
         if (acao && request.method === "POST") {

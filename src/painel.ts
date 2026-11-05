@@ -5,6 +5,7 @@
  * públicos, eventos para a Meta e ingestão. Entra quem tem sessão (login por e-mail) ou o token de administrador.
  */
 import { EMPRESA } from "./config/negocio.ts";
+import { STATUS_EM_CIRCULACAO } from "./agentes/criador.ts";
 import type { Metricas } from "./metricas.ts";
 import type { Quem } from "./login.ts";
 
@@ -19,8 +20,9 @@ export interface ExtrasPainel { eventos: { por_status: Array<Record<string, unkn
 export function paginaPainel(p: Record<string, unknown>, m: Metricas, x: ExtrasPainel, quem: Quem, q: string): string {
   const estado = (p.estado ?? {}) as Record<string, { nivel: number; parado: boolean }>;
   const acoes = ((p.acoes as { acoes?: Array<Record<string, unknown>> })?.acoes ?? []).slice(0, 30);
-  // reprovado ou com erro antes de ter imagem não aparece: não há nada para olhar (fica em /admin/agentes)
-  const criativos = ((p.criativos as Array<Record<string, unknown>>) ?? []).filter((c) => c.imagem_chave || c.video_chave || !(c.status === "reprovado" || c.status === "erro")).slice(0, 12);
+  // só o que importa agora: no ar (publicado e ativo na Meta) e aguardando aprovação; reprovado, erro e pausado
+  // ficam fora (o histórico continua em /admin/agentes e ensina o Criador)
+  const criativos = ((p.criativos as Array<Record<string, unknown>>) ?? []).filter((c) => (c.status === "sombra" && Boolean(c.imagem_chave || c.video_chave)) || (c.status === "publicado" && (c.status_anuncio == null || STATUS_EM_CIRCULACAO.includes(String(c.status_anuncio))))).slice(0, 12);
   const alertas = ((p.alertas as Array<Record<string, unknown>>) ?? []).slice(0, 10);
   const execucoes = ((p.execucoes as Array<Record<string, unknown>>) ?? []).slice(0, 12);
   const publicos = (p.publicos as Array<Record<string, unknown>>) ?? [];
@@ -40,6 +42,7 @@ h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:0 0 10px}.sub{color:#5
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 8px;border-top:1px solid #eef2f0;text-align:left;vertical-align:top}th{color:#5a6b73;font-weight:600}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#e6eeea}.bom{background:#e7f6ec;color:#0e6b3a}.ruim{background:#fdecea;color:#b42318}.atencao{background:#fff3df;color:#8a5100}
 .criativos{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}.criativo img,.criativo video{width:100%;aspect-ratio:4/5;object-fit:cover;border-radius:8px;border:1px solid #d9e2dd;background:#000}.criativo video{aspect-ratio:9/16}.criativo p{font-size:13px;color:#5a6b73;margin:6px 0 0;white-space:pre-line}
+.midias{display:grid;grid-template-columns:1fr .5625fr;gap:8px;align-items:start}.midias figure{margin:0;min-width:0}.midias figcaption{font-size:12px;color:#5f6d66;text-align:center;margin-top:4px}.criativo .midias video.q{aspect-ratio:1/1;object-fit:contain}.criativo .midias video.s{aspect-ratio:9/16;object-fit:contain}@media (min-width:760px){.criativo.duplo{grid-column:span 2}}
 .acoes{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.acoes form{display:contents}.acoes button{border:0;border-radius:8px;padding:8px 10px;font-weight:600;cursor:pointer;font-size:13px}.b1{background:#0e6b3a;color:#fff}.b2{background:#fdecea;color:#b42318}.b3{background:#e6eeea;color:#1e333b}
 .criativo textarea{width:100%;box-sizing:border-box;margin-top:8px;border:1px solid #c9d4ce;border-radius:8px;padding:8px;font:inherit;font-size:13px}
 .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5a6b73}.aviso{background:#fff3df;border:1px solid #f2cf94;border-radius:8px;padding:10px 12px;margin:0 0 16px}
@@ -71,10 +74,15 @@ ${m.coortes.length ? `<h2 style="margin-top:16px">Coortes: de quem virou cliente
 
 <section class="cartao" id="criativos"><h2>Criativos do Criador</h2><p class="sub">Em <b>sombra</b> o criativo está pronto e esperando você: publicar sobe para a Meta no conjunto de teste; reprovar arquiva; "gerar nova versão" manda o seu pedido ao Criador e a versão nova volta aqui, em sombra.</p><div class="criativos">${criativos.map((c) => {
     const copy = (c.copy ?? {}) as Record<string, string>;
-    const midia = c.formato === "video" && c.video_chave ? `<video controls preload="metadata" poster="/painel/criativos/${esc(c.id)}-capa.png${q}" src="/painel/criativos/${esc(c.id)}.webm${q}"></video>` : c.imagem_chave ? `<img src="/painel/criativos/${esc(c.id)}.png${q}" alt="">` : "";
+    const midia = c.formato === "video" && c.video_chave
+      ? (c.video_story_chave
+        // os dois formatos lado a lado, cada um na proporção dele: feed 1:1 e stories/reels 9:16
+        ? `<div class="midias"><figure><video class="q" controls preload="metadata" poster="/painel/criativos/${esc(c.id)}-capa.png${q}" src="/painel/criativos/${esc(c.id)}.webm${q}"></video><figcaption>Feed · 1:1</figcaption></figure><figure><video class="s" controls preload="metadata" poster="/painel/criativos/${esc(c.id)}-story-capa.png${q}" src="/painel/criativos/${esc(c.id)}-story.webm${q}"></video><figcaption>Stories e Reels · 9:16</figcaption></figure></div>`
+        : `<video controls preload="metadata" poster="/painel/criativos/${esc(c.id)}-capa.png${q}" src="/painel/criativos/${esc(c.id)}.webm${q}"></video>`)
+      : c.imagem_chave ? `<img src="/painel/criativos/${esc(c.id)}.png${q}" alt="">` : "";
     const form = (acao: string, cls: string, rot: string) => `<form method="post" action="/painel/criativos/${esc(c.id)}/${acao}${q}"><button class="${cls}" type="submit">${rot}</button></form>`;
     const botoes = c.status === "sombra" ? `<div class="acoes">${form("publicar", "b1", "Publicar na Meta")}${form("reprovar", "b2", "Reprovar")}</div><form method="post" action="/painel/criativos/${esc(c.id)}/melhorar${q}"><textarea name="feedback" rows="2" placeholder="O que melhorar? (ex.: título mais curto, falar do preço antes)" required></textarea><div class="acoes"><button class="b3" type="submit">Gerar nova versão</button></div></form>` : "";
-    return `<div class="criativo">${midia}<p><span class="tag ${c.status === "publicado" ? "bom" : c.status === "sombra" ? "atencao" : "ruim"}">${esc(c.status)}</span> ${esc(c.dia)}${c.formato === "video" ? " · vídeo" : ""}${c.criativo_pai ? ` · nova versão do nº ${esc(c.criativo_pai)}` : ""}</p><p><b>${esc(copy.headline)}</b></p><p>${esc(copy.texto_primario)}</p>${c.feedback ? `<p><i>Pedido: ${esc(c.feedback)}</i></p>` : ""}${c.ad_id ? `<p class="mono">anúncio ${esc(c.ad_id)}</p>` : ""}${c.resposta && c.status === "erro" ? `<p class="mono">${esc(c.resposta)}</p>` : ""}${botoes}</div>`;
+    return `<div class="criativo${c.video_story_chave ? " duplo" : ""}">${midia}<p><span class="tag ${c.status === "publicado" ? "bom" : c.status === "sombra" ? "atencao" : "ruim"}">${esc(c.status === "publicado" ? "no ar" : c.status === "sombra" ? "aguardando aprovação" : String(c.status))}</span> ${esc(c.dia)}${c.formato === "video" ? " · vídeo" : ""}${c.criativo_pai ? ` · nova versão do nº ${esc(c.criativo_pai)}` : ""}</p><p><b>${esc(copy.headline)}</b></p><p>${esc(copy.texto_primario)}</p>${c.feedback ? `<p><i>Pedido: ${esc(c.feedback)}</i></p>` : ""}${c.ad_id ? `<p class="mono">anúncio ${esc(c.ad_id)}</p>` : ""}${c.resposta && c.status === "erro" ? `<p class="mono">${esc(c.resposta)}</p>` : ""}${botoes}</div>`;
   }).join("") || "<p>Nenhum criativo ainda. Peça um: <span class=\"mono\">POST /admin/criativos/pedir?angulo=...&amp;formato=imagem|video</span></p>"}</div></section>
 
 <div class="grade">

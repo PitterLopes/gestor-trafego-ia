@@ -20,9 +20,12 @@ import { PERFIL_NEGOCIO } from "./prompts/analista.ts";
 import { AFIRMACOES_PERMITIDAS, ESQUEMA_COPY, ESQUEMA_VERIFICACAO, PROIBIDO, SISTEMA_CRIADOR, SISTEMA_VERIFICADOR } from "./prompts/criador.ts";
 import { PALAVRAS_CONTAGEM, PRECO_LINHA as PRECO_CONFIG, PRECO_PERMITIDO } from "../config/negocio.ts";
 import { TEMPLATE_ALTURA, TEMPLATE_LARGURA, htmlEscritorio } from "./templates/escritorio.ts";
-import { VIDEO_ALTURA, VIDEO_LARGURA, htmlChatVideo } from "./templates/chat_video.ts";
-import type { Mensagem } from "./templates/chat_video.ts";
-import { bibliotecaParaModelo, montarBiblioteca } from "./biblioteca.ts";
+import { TAMANHOS, htmlChatSistema, primeiroNome, protocoloDe } from "./templates/chat_sistema.ts";
+import type { FormatoVideo, MensagemSistema as Mensagem } from "./templates/chat_sistema.ts";
+import { baseParaModelo, bibliotecaParaModelo, lerAnuncios, montarBiblioteca } from "./biblioteca.ts";
+import { analiseParaModelo, imagemDataUrl, lerIndice, lerReferencia, prepararReferencia } from "./referencia.ts";
+import type { Referencia } from "./referencia.ts";
+import type { AnuncioReferencia } from "./biblioteca.ts";
 import { lerResumos, paginaParaModelo } from "./paginas.ts";
 
 export const MODELO_CRIADOR_PADRAO = "anthropic/claude-sonnet-5.5";
@@ -54,8 +57,30 @@ export interface Copy {
   conversa: Mensagem[];
   setor: string;
   atendente: string;
+  /** Nome do cliente na lista de conversas (vídeo). */
+  contato?: string;
 }
 export type Formato = "imagem" | "video";
+
+/** Roteiro do vídeo na tela do sistema a partir da copy aprovada. */
+export function roteiroDoVideo(c: Copy, agora: Date): Parameters<typeof htmlChatSistema>[0] {
+  const [a, m, d] = diaBrt(agora).split("-");
+  return {
+    titulo_imagem: c.titulo_imagem,
+    contato: c.contato?.trim() || "Cliente",
+    setor: primeiroNome(c.setor || "", "Atendimento"),
+    atendente: primeiroNome(c.atendente || "", "Equipe"),
+    protocolo: protocoloDe(c.conversa, c.nome),
+    conversa: c.conversa,
+    promessa: c.promessa,
+    preco: PRECO_LINHA,
+    dia: `${d}/${m}/${a}`,
+    segundos: VIDEO_SEGUNDOS,
+  };
+}
+
+/** Os dois vídeos: 1:1 (feed, o principal) e 9:16 (stories e reels). */
+export const FORMATOS_VIDEO: FormatoVideo[] = ["quadrado", "story"];
 export const VIDEO_SEGUNDOS = 15;
 export interface Verificacao {
   aprovado: boolean;
@@ -72,6 +97,8 @@ export interface Pedido {
   angulo: string;
   motivo: string;
   criativo_pai: number | null;
+  /** Anúncio da Meta que a variação segue; null = o Criador escolhe na pasta de referência. */
+  anuncio_base?: string | null;
 }
 
 export type RenderPng = (html: string, largura: number, altura: number) => Promise<Uint8Array>;
@@ -90,12 +117,13 @@ export function lerCopy(v: unknown, formato: Formato = "imagem"): Copy | null {
   }
   out.nome = String(out.nome).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40) || "Criativo";
   const conversa: Mensagem[] = Array.isArray(v.conversa)
-    ? v.conversa.filter((m): m is { de: string; texto: string } => ehObj(m) && (m.de === "cliente" || m.de === "atendente") && typeof m.texto === "string" && m.texto.trim() !== "").map((m) => ({ de: m.de as Mensagem["de"], texto: m.texto.trim().slice(0, 90) })).slice(0, 10)
+    ? v.conversa.filter((m): m is { de: string; texto: string } => ehObj(m) && (m.de === "cliente" || m.de === "atendente" || m.de === "evento") && typeof m.texto === "string" && m.texto.trim() !== "").map((m) => ({ de: m.de as Mensagem["de"], texto: m.texto.trim().slice(0, 90) })).slice(0, 10)
     : [];
-  if (formato === "video" && conversa.length < 4) return null;
+  if (formato === "video" && conversa.filter((m) => m.de !== "evento").length < 4) return null;
   out.conversa = conversa;
   out.setor = typeof v.setor === "string" ? v.setor.trim().slice(0, 40) : "";
   out.atendente = typeof v.atendente === "string" ? v.atendente.trim().slice(0, 30) : "";
+  out.contato = typeof v.contato === "string" ? v.contato.trim().slice(0, 40) : "";
   return out as unknown as Copy;
 }
 
@@ -155,14 +183,42 @@ export async function verificar(env: CriadorEnv, c: Copy, fetchFn: typeof fetch,
 export const APRIMORAMENTOS_DESLIGADOS = ["text_optimizations", "image_templates", "image_touchups", "adapt_to_placement", "add_text_overlay", "description_automation", "inline_comment", "generate_cta", "image_animation", "image_background_gen", "media_type_automation", "text_translation", "text_overlay_translation", "product_extensions", "site_extensions"];
 export const APRIMORAMENTOS: Record<string, string> = { degrees_of_freedom_spec: JSON.stringify({ creative_features_spec: Object.fromEntries(APRIMORAMENTOS_DESLIGADOS.map((k) => [k, { enroll_status: "OPT_OUT" }])) }) };
 
-/** O que a conta já aprendeu (anúncios que funcionam e que não) e a página de destino, para o prompt. */
-export async function contextoDoCriador(env: CriadorEnv, agora: Date): Promise<{ biblioteca: string; pagina: string }> {
-  const [b, paginas] = await Promise.all([montarBiblioteca(env.DB, agora), lerResumos(env.DB)]);
+/**
+ * O que a conta já aprendeu, a página de destino e o anúncio base. Base: o que o pedido aponta; senão, um dos
+ * anúncios da pasta de referência (alternando entre eles pelo número do pedido); senão, o melhor da biblioteca.
+ * Com base na pasta, a imagem guardada vai junto para o modelo ver.
+ */
+export async function contextoDoCriador(env: CriadorEnv, agora: Date, p?: Pick<Pedido, "id" | "anuncio_base">, fetchFn?: typeof fetch): Promise<ContextoCriador> {
+  const [b, paginas, indice] = await Promise.all([montarBiblioteca(env.DB, agora), lerResumos(env.DB), lerIndice(env)]);
   const destino = paginas.find((x) => x.url === env.CRIADOR_LINK) ?? paginas.find((x) => x.resumo);
-  return { biblioteca: bibliotecaParaModelo(b), pagina: paginaParaModelo(destino) };
+  let base: AnuncioReferencia | null = null, ref: Referencia | null = null;
+  if (p?.anuncio_base) {
+    [base = null] = await lerAnuncios(env.DB, agora, p.anuncio_base);
+    ref = await lerReferencia(env, p.anuncio_base);
+    if (!ref && base && fetchFn) ref = await prepararReferencia(env, base, "manual", fetchFn, agora);
+  } else if (indice.referencias.length) {
+    ref = indice.referencias[(p?.id ?? 0) % indice.referencias.length];
+    base = b.bases.find((x) => x.anuncio_id === ref!.anuncio_id) ?? (await lerAnuncios(env.DB, agora, ref.anuncio_id))[0] ?? null;
+  }
+  if (!base) { base = b.bases[0] ?? null; ref = base ? await lerReferencia(env, base.anuncio_id) : null; }
+  return { biblioteca: bibliotecaParaModelo(b), pagina: paginaParaModelo(destino), base, referencia: ref, imagem: await imagemDataUrl(env, ref) };
 }
 
-export async function escreverCopy(env: CriadorEnv, p: Pedido, fetchFn: typeof fetch, agora: Date, ctx: { biblioteca: string; pagina: string; anterior?: { copy: Copy; feedback: string } | null } = { biblioteca: "", pagina: "" }): Promise<{ copy: Copy; modelo: string } | { erro: string }> {
+/** O que entra no prompt: biblioteca, página, o anúncio base (o que converte) e, numa nova versão, a anterior. */
+export interface ContextoCriador {
+  biblioteca: string;
+  pagina: string;
+  base?: AnuncioReferencia | null;
+  /** A base na pasta de referência (análise do visual) e a imagem dela, para o modelo ver. */
+  referencia?: Referencia | null;
+  imagem?: string | null;
+  anterior?: { copy: Copy; feedback: string } | null;
+}
+
+/** Pedidos dos agentes precisam de um anúncio que converte como base; os da pessoa (manual, feedback) seguem mesmo sem. */
+export const ORIGENS_EXIGEM_BASE = new Set(["analista_ia", "estrategista"]);
+
+export async function escreverCopy(env: CriadorEnv, p: Pedido, fetchFn: typeof fetch, agora: Date, ctx: ContextoCriador = { biblioteca: "", pagina: "" }): Promise<{ copy: Copy; modelo: string } | { erro: string }> {
   const r = await chamarLlm<unknown>(env, {
     agente: "criador",
     modelo: env.LLM_MODELO_CRIADOR || MODELO_CRIADOR_PADRAO,
@@ -170,10 +226,14 @@ export async function escreverCopy(env: CriadorEnv, p: Pedido, fetchFn: typeof f
     sistema: `${SISTEMA_CRIADOR}\n\nSOBRE A EMPRESA:\n${PERFIL_NEGOCIO}\n\nPODE AFIRMAR:\n${AFIRMACOES_PERMITIDAS}\n\nPROIBIDO:\n${PROIBIDO}`,
     usuario: [
       `FORMATO: ${p.formato}\nÂNGULO: ${p.angulo}\nPOR QUÊ: ${p.motivo}\nCAMPANHA: ${p.campanha ?? "—"}\nLinha de preço obrigatória na imagem: "${PRECO_LINHA}".`,
+      ctx.base ? baseParaModelo(ctx.base) : "",
+      ctx.base && ctx.referencia?.analise ? `O QUE O ANÚNCIO BASE MOSTRA (a imagem vai anexa):\n${analiseParaModelo(ctx.referencia)}` : "",
+      ctx.base && ctx.imagem && p.formato === "video" ? "VÍDEO A PARTIR DO ANÚNCIO BASE: se a imagem anexa for uma tela de chat, a conversa do vídeo é essa mesma conversa acontecendo mensagem por mensagem, com o mesmo setor, o mesmo tipo de pedido e o mesmo tom. Troque nomes e dados por fictícios." : "",
       ctx.anterior ? `VERSÃO ANTERIOR (foi revisada por uma pessoa; escreva uma versão nova que atenda ao pedido abaixo, mantendo o que não foi criticado):\n${JSON.stringify(ctx.anterior.copy)}\n\nO QUE A PESSOA PEDIU PARA MELHORAR: ${ctx.anterior.feedback}` : "",
       ctx.pagina,
       ctx.biblioteca ? `O QUE A CONTA JÁ APRENDEU COM OS ANÚNCIOS QUE RODARAM:\n${ctx.biblioteca}` : "",
     ].filter(Boolean).join("\n\n"),
+    imagens: ctx.imagem ? [ctx.imagem] : undefined,
     esquema: ESQUEMA_COPY as unknown as Record<string, unknown>,
     nomeEsquema: "copy_anuncio",
     temperatura: 0.7,
@@ -238,38 +298,85 @@ export async function publicarNaMeta(env: CriadorEnv, c: Copy, png: Uint8Array, 
  * No Instagram o anúncio sai em nome do perfil ligado à página: a conta de anúncios precisa estar conectada a esse perfil e o
  * usuário do sistema precisa ter a página e o perfil atribuídos (senão a Meta recusa com o subcódigo 1815199).
  */
-export async function publicarVideoNaMeta(env: CriadorEnv, c: Copy, webm: Uint8Array, capa: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs = Number(env.META_VIDEO_ESPERA_MS ?? 4000), tentativas = 20): Promise<{ ok: true; video_id: string; imagem_hash: string; creative_id: string; ad_id: string } | { ok: false; etapa: string; resposta: string }> {
-  const conta = `act_${env.META_AD_ACCOUNT_ID}`;
+/** Sobe um vídeo para a conta e espera a Meta deixar "ready" (o criativo só aceita vídeo pronto). */
+async function subirVideo(env: CriadorEnv, webm: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs: number, tentativas: number): Promise<{ ok: true; video_id: string } | { ok: false; etapa: string; resposta: string }> {
   const fd = new FormData();
   fd.append("access_token", env.META_ADS_TOKEN!);
   fd.append("name", nome);
   fd.append("source", new Blob([webm.slice().buffer], { type: "video/webm" }), `${nome}.webm`);
-  const up = await fetchFn(`https://graph.facebook.com/${META_API_VERSAO}/${conta}/advideos`, { method: "POST", body: fd });
+  const up = await fetchFn(`https://graph.facebook.com/${META_API_VERSAO}/act_${env.META_AD_ACCOUNT_ID}/advideos`, { method: "POST", body: fd });
   const upTexto = await up.text();
   let videoId: string | null = null;
   try { videoId = (JSON.parse(upTexto) as { id?: string }).id ?? null; } catch { videoId = null; }
   if (!up.ok || !videoId) return { ok: false, etapa: "video", resposta: `HTTP ${up.status}: ${upTexto.slice(0, 600)}` };
-  // a Meta processa o vídeo em segundo plano; o criativo só aceita vídeo "ready"
-  let pronto = false;
-  for (let i = 0; i < tentativas && !pronto; i++) {
+  for (let i = 0; i < tentativas; i++) {
     await new Promise((r) => setTimeout(r, esperaMs));
     const st = await fetchFn(`https://graph.facebook.com/${META_API_VERSAO}/${videoId}?fields=status`, { headers: { authorization: `Bearer ${env.META_ADS_TOKEN}` } });
     const j = (await st.json().catch(() => ({}))) as { status?: { video_status?: string } };
-    if (j.status?.video_status === "ready") pronto = true;
-    else if (j.status?.video_status === "error") return { ok: false, etapa: "video", resposta: "a Meta não conseguiu processar o vídeo" };
+    if (j.status?.video_status === "ready") return { ok: true, video_id: videoId };
+    if (j.status?.video_status === "error") return { ok: false, etapa: "video", resposta: "a Meta não conseguiu processar o vídeo" };
   }
-  if (!pronto) return { ok: false, etapa: "video", resposta: "vídeo ainda em processamento na Meta; tente publicar de novo em alguns minutos" };
-  const img = await postMeta(env, `${conta}/adimages`, { bytes: b64(capa), name: `${nome}-capa.png` }, fetchFn);
+  return { ok: false, etapa: "video", resposta: "vídeo ainda em processamento na Meta; tente publicar de novo em alguns minutos" };
+}
+
+async function subirCapa(env: CriadorEnv, png: Uint8Array, nome: string, fetchFn: typeof fetch): Promise<string | { etapa: string; resposta: string }> {
+  const img = await postMeta(env, `act_${env.META_AD_ACCOUNT_ID}/adimages`, { bytes: b64(png), name: `${nome}.png` }, fetchFn);
   const hash = Object.values((img.json.images ?? {}) as Record<string, { hash?: string }>)[0]?.hash;
-  if (!img.ok || !hash) return { ok: false, etapa: "capa", resposta: `HTTP ${img.status}: ${img.texto}` };
-  const spec = { page_id: env.META_PAGE_ID, video_data: { video_id: videoId, image_hash: hash, message: c.texto_primario, title: c.headline, link_description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } } };
-  const cr = await postMeta(env, `${conta}/adcreatives`, { name: nome, object_story_spec: JSON.stringify(spec), ...APRIMORAMENTOS }, fetchFn);
+  return img.ok && hash ? hash : { etapa: "capa", resposta: `HTTP ${img.status}: ${img.texto}` };
+}
+
+/**
+ * Criativo com dois vídeos, um por posicionamento (personalização por posicionamento da Meta): o 9:16 nos stories
+ * e reels, o 1:1 em todo o resto. Mesmo texto, título, descrição e link nos dois.
+ */
+export function specDoisFormatos(env: CriadorEnv, c: Copy, quadrado: { video_id: string; hash: string }, story: { video_id: string; hash: string }): Record<string, unknown> {
+  const plataformas = ["facebook", "instagram"];
+  return {
+    videos: [
+      { video_id: quadrado.video_id, thumbnail_hash: quadrado.hash, adlabels: [{ name: "dd_quadrado" }] },
+      { video_id: story.video_id, thumbnail_hash: story.hash, adlabels: [{ name: "dd_story" }] },
+    ],
+    bodies: [{ text: c.texto_primario }],
+    titles: [{ text: c.headline }],
+    descriptions: [{ text: c.descricao }],
+    link_urls: [{ website_url: env.CRIADOR_LINK }],
+    call_to_action_types: ["LEARN_MORE"],
+    ad_formats: ["SINGLE_VIDEO"],
+    optimization_type: "PLACEMENT",
+    asset_customization_rules: [
+      { customization_spec: { publisher_platforms: plataformas, facebook_positions: ["story", "facebook_reels"], instagram_positions: ["story", "reels"] }, video_label: { name: "dd_story" }, priority: 1 },
+      { customization_spec: { publisher_platforms: plataformas, facebook_positions: ["feed", "video_feeds", "marketplace", "search"], instagram_positions: ["stream", "explore", "explore_home", "profile_feed"] }, video_label: { name: "dd_quadrado" }, priority: 2 },
+    ],
+  };
+}
+
+/** Vídeo → capa → criativo → anúncio ACTIVE. Com `story`, o anúncio leva os dois formatos (1:1 e 9:16). */
+export async function publicarVideoNaMeta(env: CriadorEnv, c: Copy, webm: Uint8Array, capa: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs = Number(env.META_VIDEO_ESPERA_MS ?? 4000), tentativas = 20, story: { webm: Uint8Array; capa: Uint8Array } | null = null): Promise<{ ok: true; video_id: string; video_story_id: string | null; imagem_hash: string; creative_id: string; ad_id: string } | { ok: false; etapa: string; resposta: string }> {
+  const conta = `act_${env.META_AD_ACCOUNT_ID}`;
+  const v = await subirVideo(env, webm, nome, fetchFn, esperaMs, tentativas);
+  if (!v.ok) return v;
+  const hash = await subirCapa(env, capa, `${nome}-capa`, fetchFn);
+  if (typeof hash !== "string") return { ok: false, ...hash };
+  let corpo: Record<string, string>;
+  let storyId: string | null = null;
+  if (story) {
+    const vs = await subirVideo(env, story.webm, `${nome}_story`, fetchFn, esperaMs, tentativas);
+    if (!vs.ok) return { ...vs, etapa: "video_story" };
+    const hs = await subirCapa(env, story.capa, `${nome}_story-capa`, fetchFn);
+    if (typeof hs !== "string") return { ok: false, etapa: "capa_story", resposta: hs.resposta };
+    storyId = vs.video_id;
+    corpo = { name: nome, object_story_spec: JSON.stringify({ page_id: env.META_PAGE_ID }), asset_feed_spec: JSON.stringify(specDoisFormatos(env, c, { video_id: v.video_id, hash }, { video_id: vs.video_id, hash: hs })), ...APRIMORAMENTOS };
+  } else {
+    const spec = { page_id: env.META_PAGE_ID, video_data: { video_id: v.video_id, image_hash: hash, message: c.texto_primario, title: c.headline, link_description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } } };
+    corpo = { name: nome, object_story_spec: JSON.stringify(spec), ...APRIMORAMENTOS };
+  }
+  const cr = await postMeta(env, `${conta}/adcreatives`, corpo, fetchFn);
   const creativeId = typeof cr.json.id === "string" ? cr.json.id : null;
   if (!cr.ok || !creativeId) return { ok: false, etapa: "criativo", resposta: `HTTP ${cr.status}: ${cr.texto}` };
   const ad = await postMeta(env, `${conta}/ads`, { name: nome, adset_id: env.META_ADSET_CRIADOR_ID!, creative: JSON.stringify({ creative_id: creativeId }), status: "ACTIVE" }, fetchFn);
   const adId = typeof ad.json.id === "string" ? ad.json.id : null;
   if (!ad.ok || !adId) return { ok: false, etapa: "anuncio", resposta: `HTTP ${ad.status}: ${ad.texto}` };
-  return { ok: true, video_id: videoId, imagem_hash: hash, creative_id: creativeId, ad_id: adId };
+  return { ok: true, video_id: v.video_id, video_story_id: storyId, imagem_hash: hash, creative_id: creativeId, ad_id: adId };
 }
 
 // ---------- rodada ----------
@@ -278,16 +385,16 @@ const n = (v: unknown): number => Number(v ?? 0) || 0;
 
 export async function pedidosPendentes(db: D1Database, soId?: number): Promise<Pedido[]> {
   const r = soId
-    ? await db.prepare("SELECT id, dia, origem, formato, campanha_id, campanha, angulo, motivo, criativo_pai FROM ads_pedidos_criativo WHERE status = 'pendente' AND id = ?1").bind(soId).all<Record<string, unknown>>()
-    : await db.prepare("SELECT id, dia, origem, formato, campanha_id, campanha, angulo, motivo, criativo_pai FROM ads_pedidos_criativo WHERE status = 'pendente' ORDER BY id").all<Record<string, unknown>>();
-  return r.results.map((x) => ({ id: n(x.id), dia: String(x.dia), origem: String(x.origem), formato: x.formato === "video" ? "video" : "imagem", campanha_id: x.campanha_id == null ? null : String(x.campanha_id), campanha: x.campanha == null ? null : String(x.campanha), angulo: String(x.angulo), motivo: String(x.motivo), criativo_pai: x.criativo_pai == null ? null : n(x.criativo_pai) }));
+    ? await db.prepare("SELECT id, dia, origem, formato, campanha_id, campanha, angulo, motivo, criativo_pai, anuncio_base FROM ads_pedidos_criativo WHERE status = 'pendente' AND id = ?1").bind(soId).all<Record<string, unknown>>()
+    : await db.prepare("SELECT id, dia, origem, formato, campanha_id, campanha, angulo, motivo, criativo_pai, anuncio_base FROM ads_pedidos_criativo WHERE status = 'pendente' ORDER BY id").all<Record<string, unknown>>();
+  return r.results.map((x) => ({ id: n(x.id), dia: String(x.dia), origem: String(x.origem), formato: x.formato === "video" ? "video" : "imagem", campanha_id: x.campanha_id == null ? null : String(x.campanha_id), campanha: x.campanha == null ? null : String(x.campanha), angulo: String(x.angulo), motivo: String(x.motivo), criativo_pai: x.criativo_pai == null ? null : n(x.criativo_pai), anuncio_base: x.anuncio_base == null ? null : String(x.anuncio_base) }));
 }
 
-export async function registrarPedido(db: D1Database, dia: string, origem: string, p: { plataforma: string; campanha_id: string | null; campanha: string | null; angulo: string; motivo: string; criativo_pai?: number | null; formato?: Formato }): Promise<number> {
+export async function registrarPedido(db: D1Database, dia: string, origem: string, p: { plataforma: string; campanha_id: string | null; campanha: string | null; angulo: string; motivo: string; criativo_pai?: number | null; formato?: Formato; anuncio_base?: string | null }): Promise<number> {
   const formato: Formato = p.formato === "video" ? "video" : "imagem";
   const existe = await db.prepare("SELECT id FROM ads_pedidos_criativo WHERE dia = ?1 AND status = 'pendente' AND angulo = ?2 AND origem = ?3 AND formato = ?4").bind(dia, p.angulo, origem, formato).first<{ id: number }>();
   if (existe) return Number(existe.id);
-  const r = await db.prepare("INSERT INTO ads_pedidos_criativo (dia, origem, plataforma, campanha_id, campanha, angulo, motivo, status, criativo_pai, formato, criado_em) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pendente', ?8, ?9, ?10)").bind(dia, origem, p.plataforma, p.campanha_id, p.campanha, p.angulo.slice(0, 400), p.motivo.slice(0, 600), p.criativo_pai ?? null, formato, nowIso()).run();
+  const r = await db.prepare("INSERT INTO ads_pedidos_criativo (dia, origem, plataforma, campanha_id, campanha, angulo, motivo, status, criativo_pai, formato, criado_em, anuncio_base) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pendente', ?8, ?9, ?10, ?11)").bind(dia, origem, p.plataforma, p.campanha_id, p.campanha, p.angulo.slice(0, 400), p.motivo.slice(0, 600), p.criativo_pai ?? null, formato, nowIso(), p.anuncio_base ?? null).run();
   return Number(r.meta.last_row_id);
 }
 
@@ -323,7 +430,10 @@ export async function rodarCriador(env: CriadorEnv, nivel: number, deps: { rende
     // pedido velho (mais de 7 dias) expira sem gerar
     if (diaBrt(addDays(agora, -7)) > p.dia) { await env.DB.prepare("UPDATE ads_pedidos_criativo SET status = 'expirado' WHERE id = ?1").bind(p.id).run(); out.detalhes.push({ pedido: p.id, criativo: null, status: "expirado", nota: "pedido com mais de 7 dias" }); continue; }
 
-    const ctx: { biblioteca: string; pagina: string; anterior?: { copy: Copy; feedback: string } | null } = await contextoDoCriador(env, agora);
+    const ctx: ContextoCriador = await contextoDoCriador(env, agora, p, fetchFn);
+    // variação nasce de anúncio que converte em cadastro: sem base com confiança, o pedido de agente espera
+    if (!ctx.base && ORIGENS_EXIGEM_BASE.has(p.origem)) { out.detalhes.push({ pedido: p.id, criativo: null, status: "adiado", nota: "nenhum anúncio com cadastros suficientes para servir de base" }); continue; }
+    const angulo = ctx.base ? `variação de "${ctx.base.anuncio}" (${ctx.base.anuncio_id}) · ${p.angulo}`.slice(0, 600) : p.angulo;
     if (p.criativo_pai) {
       const pai = await env.DB.prepare("SELECT copy_json, feedback FROM ads_criativos WHERE id = ?1").bind(p.criativo_pai).first<{ copy_json: string; feedback: string | null }>();
       if (pai) ctx.anterior = { copy: JSON.parse(pai.copy_json) as Copy, feedback: pai.feedback ?? p.motivo };
@@ -332,8 +442,8 @@ export async function rodarCriador(env: CriadorEnv, nivel: number, deps: { rende
     if ("erro" in esc) { out.erros += 1; out.detalhes.push({ pedido: p.id, criativo: null, status: "erro", nota: esc.erro }); continue; }
     const ver = await verificar(env, esc.copy, fetchFn, agora, ctx.pagina);
     const ins = await env.DB
-      .prepare("INSERT INTO ads_criativos (dia, pedido_id, plataforma, campanha_id, conjunto_id, angulo, modelo, copy_json, verificacao_json, status, criativo_pai, formato, criado_em) VALUES (?1, ?2, 'meta', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)")
-      .bind(hoje, p.id, p.campanha_id, env.META_ADSET_CRIADOR_ID ?? null, p.angulo, esc.modelo, JSON.stringify(esc.copy), JSON.stringify(ver), ver.aprovado ? "sombra" : "reprovado", p.criativo_pai, p.formato, nowIso())
+      .prepare("INSERT INTO ads_criativos (dia, pedido_id, plataforma, campanha_id, conjunto_id, angulo, modelo, copy_json, verificacao_json, status, criativo_pai, formato, criado_em, anuncio_base) VALUES (?1, ?2, 'meta', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)")
+      .bind(hoje, p.id, p.campanha_id, env.META_ADSET_CRIADOR_ID ?? null, angulo, esc.modelo, JSON.stringify(esc.copy), JSON.stringify(ver), ver.aprovado ? "sombra" : "reprovado", p.criativo_pai, p.formato, nowIso(), ctx.base?.anuncio_id ?? null)
       .run();
     const id = Number(ins.meta.last_row_id);
     if (!ver.aprovado) {
@@ -344,14 +454,20 @@ export async function rodarCriador(env: CriadorEnv, nivel: number, deps: { rende
     }
     let png: Uint8Array;
     let webm: Uint8Array | null = null;
+    let story: { webm: Uint8Array; capa: Uint8Array } | null = null;
     try {
       if (p.formato === "video") {
         if (!deps.renderWebm) throw new Error("sem gravador de vídeo");
-        const v = await deps.renderWebm(htmlChatVideo({ titulo_imagem: esc.copy.titulo_imagem, setor: esc.copy.setor || "Atendimento", atendente: esc.copy.atendente || "Equipe", conversa: esc.copy.conversa, promessa: esc.copy.promessa, preco: PRECO_LINHA, segundos: VIDEO_SEGUNDOS }), VIDEO_LARGURA, VIDEO_ALTURA, VIDEO_SEGUNDOS);
-        webm = v.webm; png = v.capa;
+        const roteiro = roteiroDoVideo(esc.copy, agora);
+        const q = await deps.renderWebm(htmlChatSistema(roteiro, "quadrado"), TAMANHOS.quadrado.largura, TAMANHOS.quadrado.altura, VIDEO_SEGUNDOS);
+        webm = q.webm; png = q.capa;
         await env.CRIATIVOS.put(`criativos/${id}.webm`, webm, { httpMetadata: { contentType: "video/webm" } });
         await env.CRIATIVOS.put(`criativos/${id}-capa.png`, png, { httpMetadata: { contentType: "image/png" } });
-        await env.DB.prepare("UPDATE ads_criativos SET video_chave = ?2, capa_chave = ?3, imagem_chave = ?3 WHERE id = ?1").bind(id, `criativos/${id}.webm`, `criativos/${id}-capa.png`).run();
+        const st = await deps.renderWebm(htmlChatSistema(roteiro, "story"), TAMANHOS.story.largura, TAMANHOS.story.altura, VIDEO_SEGUNDOS);
+        story = { webm: st.webm, capa: st.capa };
+        await env.CRIATIVOS.put(`criativos/${id}-story.webm`, st.webm, { httpMetadata: { contentType: "video/webm" } });
+        await env.CRIATIVOS.put(`criativos/${id}-story-capa.png`, st.capa, { httpMetadata: { contentType: "image/png" } });
+        await env.DB.prepare("UPDATE ads_criativos SET video_chave = ?2, capa_chave = ?3, imagem_chave = ?3, video_story_chave = ?4, capa_story_chave = ?5 WHERE id = ?1").bind(id, `criativos/${id}.webm`, `criativos/${id}-capa.png`, `criativos/${id}-story.webm`, `criativos/${id}-story-capa.png`).run();
       } else {
         png = await deps.renderPng(htmlEscritorio({ titulo_imagem: esc.copy.titulo_imagem, promessa: esc.copy.promessa, preco: PRECO_LINHA }), TEMPLATE_LARGURA, TEMPLATE_ALTURA);
         const chave = `criativos/${id}.png`;
@@ -370,7 +486,7 @@ export async function rodarCriador(env: CriadorEnv, nivel: number, deps: { rende
     const falta = metaPublicacaoConfigurada(env);
     if (falta) { out.detalhes.push({ pedido: p.id, criativo: id, status: "sombra", nota: `publicação desligada: falta ${falta}` }); continue; }
     const nome = `${esc.copy.nome}_${hoje.replace(/-/g, "")}_ia`;
-    const pub = webm ? await publicarVideoNaMeta(env, esc.copy, webm, png, nome, fetchFn) : await publicarNaMeta(env, esc.copy, png, nome, fetchFn);
+    const pub = webm ? await publicarVideoNaMeta(env, esc.copy, webm, png, nome, fetchFn, undefined, undefined, story) : await publicarNaMeta(env, esc.copy, png, nome, fetchFn);
     if (!pub.ok) {
       out.erros += 1;
       await env.DB.prepare("UPDATE ads_criativos SET status = 'erro', resposta = ?2 WHERE id = ?1").bind(id, `${pub.etapa}: ${pub.resposta}`).run();
@@ -378,7 +494,7 @@ export async function rodarCriador(env: CriadorEnv, nivel: number, deps: { rende
       continue;
     }
     out.publicados += 1;
-    await env.DB.prepare("UPDATE ads_criativos SET status = 'publicado', imagem_hash = ?2, creative_id = ?3, ad_id = ?4, video_id = ?6, resposta = 'ok', publicado_em = ?5 WHERE id = ?1").bind(id, pub.imagem_hash, pub.creative_id, pub.ad_id, nowIso(), "video_id" in pub ? pub.video_id : null).run();
+    await env.DB.prepare("UPDATE ads_criativos SET status = 'publicado', imagem_hash = ?2, creative_id = ?3, ad_id = ?4, video_id = ?6, video_story_id = ?7, resposta = 'ok', publicado_em = ?5 WHERE id = ?1").bind(id, pub.imagem_hash, pub.creative_id, pub.ad_id, nowIso(), "video_id" in pub ? pub.video_id : null, "video_story_id" in pub ? pub.video_story_id : null).run();
     out.detalhes.push({ pedido: p.id, criativo: id, status: "publicado", nota: `anúncio ${pub.ad_id} no conjunto ${env.META_ADSET_CRIADOR_ID}` });
   }
   return out;
@@ -395,7 +511,7 @@ export type AcaoCriativo = "publicar" | "reprovar" | "melhorar";
  */
 export async function acaoCriativo(env: CriadorEnv, id: number, acao: AcaoCriativo, feedback: string, quem: string, deps: { renderPng?: RenderPng; renderWebm?: RenderWebm; fetchFn?: typeof fetch; agora?: Date } = {}): Promise<{ ok: boolean; mensagem: string; novo_criativo?: number | null }> {
   const fetchFn = deps.fetchFn ?? fetch, agora = deps.agora ?? new Date();
-  const c = await env.DB.prepare("SELECT id, status, angulo, campanha_id, copy_json, imagem_chave, formato, video_chave, capa_chave FROM ads_criativos WHERE id = ?1").bind(id).first<{ id: number; status: string; angulo: string; campanha_id: string | null; copy_json: string; imagem_chave: string | null; formato: string; video_chave: string | null; capa_chave: string | null }>();
+  const c = await env.DB.prepare("SELECT id, status, angulo, campanha_id, copy_json, imagem_chave, formato, video_chave, capa_chave, anuncio_base, video_story_chave, capa_story_chave FROM ads_criativos WHERE id = ?1").bind(id).first<{ id: number; status: string; angulo: string; campanha_id: string | null; copy_json: string; imagem_chave: string | null; formato: string; video_chave: string | null; capa_chave: string | null; anuncio_base: string | null; video_story_chave: string | null; capa_story_chave: string | null }>();
   if (!c) return { ok: false, mensagem: "criativo não encontrado" };
   const marcar = (status: string | null, extra = "") => env.DB
     .prepare(`UPDATE ads_criativos SET ${status ? "status = ?2, " : ""}feedback = ?3, revisado_por = ?4, revisado_em = ?5${extra} WHERE id = ?1`)
@@ -419,27 +535,37 @@ export async function acaoCriativo(env: CriadorEnv, id: number, acao: AcaoCriati
     if (c.formato === "video" && c.video_chave) {
       const v = await env.CRIATIVOS.get(c.video_chave);
       if (!v) return { ok: false, mensagem: "vídeo não encontrado no R2" };
-      pub = await publicarVideoNaMeta(env, copy, new Uint8Array(await v.arrayBuffer()), png, nomePub, fetchFn);
+      let story: { webm: Uint8Array; capa: Uint8Array } | null = null;
+      if (c.video_story_chave && c.capa_story_chave) {
+        const [vs, cs] = await Promise.all([env.CRIATIVOS.get(c.video_story_chave), env.CRIATIVOS.get(c.capa_story_chave)]);
+        if (!vs || !cs) return { ok: false, mensagem: "vídeo 9:16 não encontrado no R2" };
+        story = { webm: new Uint8Array(await vs.arrayBuffer()), capa: new Uint8Array(await cs.arrayBuffer()) };
+      }
+      pub = await publicarVideoNaMeta(env, copy, new Uint8Array(await v.arrayBuffer()), png, nomePub, fetchFn, undefined, undefined, story);
     } else pub = await publicarNaMeta(env, copy, png, nomePub, fetchFn);
     if (!pub.ok) {
       await env.DB.prepare("UPDATE ads_criativos SET status = 'erro', resposta = ?2, revisado_por = ?3, revisado_em = ?4 WHERE id = ?1").bind(id, `${pub.etapa}: ${pub.resposta}`, quem, nowIso()).run();
       return { ok: false, mensagem: `a Meta recusou (${pub.etapa}): ${pub.resposta.slice(0, 200)}` };
     }
-    await env.DB.prepare("UPDATE ads_criativos SET status = 'publicado', imagem_hash = ?2, creative_id = ?3, ad_id = ?4, video_id = ?7, resposta = 'ok', publicado_em = ?5, revisado_por = ?6, revisado_em = ?5 WHERE id = ?1").bind(id, pub.imagem_hash, pub.creative_id, pub.ad_id, nowIso(), quem, "video_id" in pub ? pub.video_id : null).run();
+    await env.DB.prepare("UPDATE ads_criativos SET status = 'publicado', imagem_hash = ?2, creative_id = ?3, ad_id = ?4, video_id = ?7, video_story_id = ?8, resposta = 'ok', publicado_em = ?5, revisado_por = ?6, revisado_em = ?5 WHERE id = ?1").bind(id, pub.imagem_hash, pub.creative_id, pub.ad_id, nowIso(), quem, "video_id" in pub ? pub.video_id : null, "video_story_id" in pub ? pub.video_story_id : null).run();
     return { ok: true, mensagem: `publicado: anúncio ${pub.ad_id}` };
   }
   // melhorar
   if (feedback.trim().length < 5) return { ok: false, mensagem: "escreva o que melhorar" };
   await marcar(c.status === "publicado" ? null : "reprovado");
-  const pedido = await registrarPedido(env.DB, diaBrt(agora), "feedback", { plataforma: "meta", campanha_id: c.campanha_id, campanha: null, angulo: c.angulo, motivo: `melhoria pedida por ${quem}: ${feedback.slice(0, 500)}`, criativo_pai: id, formato: c.formato === "video" ? "video" : "imagem" });
+  const pedido = await registrarPedido(env.DB, diaBrt(agora), "feedback", { plataforma: "meta", campanha_id: c.campanha_id, campanha: null, angulo: c.angulo, motivo: `melhoria pedida por ${quem}: ${feedback.slice(0, 500)}`, criativo_pai: id, formato: c.formato === "video" ? "video" : "imagem", anuncio_base: c.anuncio_base });
   if (!deps.renderPng) return { ok: true, mensagem: "pedido registrado; a nova versão sai na próxima rodada", novo_criativo: null };
   const r = await rodarCriador(env, 1, { renderPng: deps.renderPng, renderWebm: deps.renderWebm, fetchFn, agora, soPedido: pedido });
   const d = r.detalhes[0];
   return { ok: Boolean(d && d.criativo), mensagem: d ? `${d.status}: ${d.nota}` : "pedido registrado", novo_criativo: d?.criativo ?? null };
 }
 
+/** Situação do anúncio na Meta (effective_status) em que ele ainda roda ou vai rodar. */
+export const STATUS_EM_CIRCULACAO = ["ACTIVE", "IN_PROCESS", "PENDING_REVIEW", "PREAPPROVED"];
+
+/** Lista dos criativos; status_anuncio vem da coleta (ads_anuncios), null quando a coleta ainda não viu o anúncio. */
 export async function listarCriativos(db: D1Database, dias = 30): Promise<Array<Record<string, unknown>>> {
   const de = diaBrt(addDays(new Date(), -(dias - 1)));
-  const r = await db.prepare("SELECT id, dia, pedido_id, campanha_id, conjunto_id, angulo, modelo, copy_json, verificacao_json, imagem_chave, creative_id, ad_id, status, resposta, criado_em, publicado_em, feedback, criativo_pai, revisado_por, revisado_em, formato, video_chave, video_id FROM ads_criativos WHERE dia >= ?1 ORDER BY id DESC LIMIT 50").bind(de).all<Record<string, unknown>>();
+  const r = await db.prepare("SELECT id, dia, pedido_id, campanha_id, conjunto_id, angulo, modelo, copy_json, verificacao_json, imagem_chave, creative_id, ad_id, status, resposta, criado_em, publicado_em, feedback, criativo_pai, revisado_por, revisado_em, formato, video_chave, video_id, video_story_chave, anuncio_base, (SELECT a.status FROM ads_anuncios a WHERE a.plataforma = 'meta' AND a.anuncio_id = ads_criativos.ad_id) AS status_anuncio FROM ads_criativos WHERE dia >= ?1 ORDER BY id DESC LIMIT 50").bind(de).all<Record<string, unknown>>();
   return r.results.map((x) => ({ ...x, copy: JSON.parse(String(x.copy_json)), verificacao: x.verificacao_json ? JSON.parse(String(x.verificacao_json)) : null, copy_json: undefined, verificacao_json: undefined }));
 }

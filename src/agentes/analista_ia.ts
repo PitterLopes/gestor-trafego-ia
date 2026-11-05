@@ -14,8 +14,10 @@ import { AUMENTAR_MAX_PCT, CONFIANCA_MIN, ORCAMENTO_MIN_CENTS, dossieParaModelo,
 import type { Dossie } from "./dossie.ts";
 import { ESQUEMA_PLANO, PERFIL_NEGOCIO, SISTEMA_ANALISTA } from "./prompts/analista.ts";
 import { registrarPedido } from "./criador.ts";
+import { lerIndice, referenciasParaModelo } from "./referencia.ts";
 
 export interface AnalistaEnv extends LlmEnv {
+  CRIATIVOS?: R2Bucket;
   LLM_MODELO_ANALISTA?: string;
   LLM_MODELO_ANALISTA_RESERVA?: string;
 }
@@ -34,6 +36,9 @@ export interface PedidoCriativo {
   campanha_id: string;
   angulo: string;
   motivo: string;
+  /** Anúncio da pasta de referência que a variação segue (o código confere que está na pasta). */
+  anuncio_base?: string | null;
+  formato?: "imagem" | "video";
 }
 export interface Plano {
   resumo: string;
@@ -70,7 +75,7 @@ export function lerPlano(v: unknown): Plano | null {
   const pedidos: PedidoCriativo[] = [];
   for (const p of v.pedidos_criativo) {
     if (!ehObj(p) || typeof p.campanha_id !== "string" || typeof p.angulo !== "string" || typeof p.motivo !== "string") return null;
-    pedidos.push({ campanha_id: p.campanha_id, angulo: p.angulo.slice(0, 400), motivo: p.motivo.slice(0, 600) });
+    pedidos.push({ campanha_id: p.campanha_id, angulo: p.angulo.slice(0, 400), motivo: p.motivo.slice(0, 600), anuncio_base: typeof p.anuncio_base === "string" && p.anuncio_base.trim() ? p.anuncio_base.trim() : null, formato: p.formato === "video" ? "video" : "imagem" });
   }
   return { resumo: v.resumo.slice(0, 1500), acoes, pedidos_criativo: pedidos };
 }
@@ -185,12 +190,13 @@ export async function rodarAnalistaIa(env: AnalistaEnv, nivel: number, fetchFn: 
   const d = await montarDossie(env.DB, agora);
   await env.DB.prepare("DELETE FROM ads_acoes WHERE dia = ?1 AND origem IN ('analista_ia', 'regras') AND status IN ('pendente', 'ensaio', 'recusada')").bind(d.hoje).run();
 
+  const pasta = await lerIndice(env);
   const r = await chamarLlm<unknown>(env, {
     agente: "analista",
     modelo: env.LLM_MODELO_ANALISTA || MODELO_ANALISTA_PADRAO,
     modeloReserva: env.LLM_MODELO_ANALISTA_RESERVA || MODELO_ANALISTA_RESERVA_PADRAO,
     sistema: `${SISTEMA_ANALISTA}\n\nSOBRE A EMPRESA:\n${PERFIL_NEGOCIO}`,
-    usuario: dossieParaModelo(d),
+    usuario: [dossieParaModelo(d), referenciasParaModelo(pasta.referencias)].filter(Boolean).join("\n\n"),
     esquema: ESQUEMA_PLANO as unknown as Record<string, unknown>,
     nomeEsquema: "plano_do_dia",
     raciocinio: "low",
@@ -203,7 +209,7 @@ export async function rodarAnalistaIa(env: AnalistaEnv, nivel: number, fetchFn: 
     const fila = await enfileirar(env.DB, d.hoje, "analista_ia", acoes, nivel);
     for (const pc of plano.pedidos_criativo) {
       const c = d.campanhas.find((k) => k.campanha_id === pc.campanha_id);
-      await registrarPedido(env.DB, d.hoje, "analista_ia", { plataforma: c?.plataforma ?? "meta", campanha_id: c ? c.campanha_id : null, campanha: c?.campanha ?? null, angulo: pc.angulo, motivo: pc.motivo });
+      await registrarPedido(env.DB, d.hoje, "analista_ia", { plataforma: c?.plataforma ?? "meta", campanha_id: c ? c.campanha_id : null, campanha: c?.campanha ?? null, angulo: pc.angulo, motivo: pc.motivo, formato: pc.formato, anuncio_base: pasta.referencias.some((x) => x.anuncio_id === pc.anuncio_base) ? pc.anuncio_base : null });
     }
     return { dia: d.hoje, origem: "analista_ia", modelo: r.modelo, erro_modelo: null, resumo: plano.resumo, acoes, pedidos_criativo: plano.pedidos_criativo, fila };
   }

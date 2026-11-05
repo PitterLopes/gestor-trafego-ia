@@ -14,11 +14,13 @@ import { bibliotecaParaModelo, montarBiblioteca } from "./biblioteca.ts";
 import { lerResumos, paginaParaModelo } from "./paginas.ts";
 import { PERFIL_NEGOCIO } from "./prompts/analista.ts";
 import { registrarPedido } from "./criador.ts";
+import { lerIndice, referenciasParaModelo } from "./referencia.ts";
 
 export const ESTRATEGISTA_PEDIDOS_SEMANA = 2;
 export const MODELO_ESTRATEGISTA_PADRAO = "anthropic/claude-sonnet-5.5";
 
 export interface EstrategistaEnv extends LlmEnv {
+  CRIATIVOS?: R2Bucket;
   LLM_MODELO_ANALISTA?: string;
   CRIADOR_LINK?: string;
 }
@@ -48,7 +50,7 @@ const SISTEMA = `Você é o estrategista de tráfego pago de uma empresa de soft
 - diagnóstico honesto, com números;
 - metas realistas: custo por cadastro alvo (perto do melhor que a conta já fez de forma sustentada) e cadastros esperados na semana com o teto sugerido;
 - teto diário sugerido: igual ou menor que o teto informado; só sugira o máximo se a conta estiver abaixo da média de custo por cadastro por 2 semanas;
-- de 1 a 3 ângulos para criativos novos, cada um com motivo ligado ao que funcionou, ao que não funcionou ou ao que a página promete e o anúncio ainda não usa, e o formato: "video" (chat animado mostrando a conversa, bom para Reels e para mostrar o produto em uso) ou "imagem";
+- de 1 a 3 ângulos para criativos novos. O Criador sempre faz variação do anúncio de "O QUE FUNCIONA" com menor custo por cadastro: cada ângulo diz o que variar nele (abertura, formato, detalhe da dor ou da página), com motivo ligado aos cadastros; não proponha ideia que nenhum anúncio com cadastro sustenta. E o formato: "video" (chat animado mostrando a conversa, bom para Reels e para mostrar o produto em uso) ou "imagem";
 - até 4 prioridades para o Analista (ex.: "não aumentar enquanto o custo por cliente não cair", "pausar X se Y").
 Português do Brasil, direto. Não proponha nada fora do que a empresa pode afirmar.`;
 
@@ -99,7 +101,7 @@ export async function rodarEstrategista(env: EstrategistaEnv, fetchFn: typeof fe
     modelo: env.LLM_MODELO_ANALISTA || MODELO_ESTRATEGISTA_PADRAO,
     modeloReserva: "deepseek/deepseek-v4-pro",
     sistema: `${SISTEMA}\n\nSOBRE A EMPRESA:\n${PERFIL_NEGOCIO}\n\nTETO DE VERBA DO CÓDIGO: ${TETO_DIARIO_CENTS} centavos por dia.`,
-    usuario: [dossieParaModelo(d), bibliotecaParaModelo(b), paginaParaModelo(destino), anterior ? `PLANO DA SEMANA ANTERIOR (${anterior.semana}):\n${JSON.stringify(anterior.plano)}` : ""].filter(Boolean).join("\n\n"),
+    usuario: [dossieParaModelo(d), bibliotecaParaModelo(b), referenciasParaModelo((await lerIndice(env)).referencias), paginaParaModelo(destino), anterior ? `PLANO DA SEMANA ANTERIOR (${anterior.semana}):\n${JSON.stringify(anterior.plano)}` : ""].filter(Boolean).join("\n\n"),
     esquema: ESQUEMA_PLANO_SEMANA as unknown as Record<string, unknown>,
     nomeEsquema: "plano_semana",
     raciocinio: "low",

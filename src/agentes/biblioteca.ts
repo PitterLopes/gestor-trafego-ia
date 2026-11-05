@@ -12,6 +12,11 @@ export const BIBLIOTECA_GASTO_MIN_CENTS = 15_000;
 /** Cadastros mínimos para um anúncio contar como "funciona": com 2 ou 3 o custo por cadastro é sorte. */
 export const BIBLIOTECA_CADASTROS_MIN = 5;
 export const BIBLIOTECA_TOP = 3;
+/**
+ * Base das variações do Criador: só anúncio que converte em cadastro (lead) com confiança. Além do gasto e dos
+ * cadastros mínimos acima, o custo por cadastro não pode passar de BASE_CPL_MAX_FATOR × a média da conta.
+ */
+export const BASE_CPL_MAX_FATOR = 1.5;
 
 export interface AnuncioReferencia {
   anuncio_id: string;
@@ -30,11 +35,22 @@ export interface Biblioteca {
   piores: AnuncioReferencia[];
   do_criador: AnuncioReferencia[];
   media_conta_cents: number | null;
+  /** Anúncios que convertem, do menor custo por cadastro para o maior: o Criador varia a partir do primeiro. */
+  bases: AnuncioReferencia[];
+}
+
+/** Quem pode servir de base: gasto e cadastros mínimos em 28 dias, texto para variar e custo por cadastro perto da média ou abaixo. */
+export function basesQueConvertem(candidatos: AnuncioReferencia[], mediaContaCents: number | null): AnuncioReferencia[] {
+  return candidatos
+    .filter((a) => a.gasto_28d >= BIBLIOTECA_GASTO_MIN_CENTS && a.cadastros_28d >= BIBLIOTECA_CADASTROS_MIN && a.custo_cadastro_cents != null && Boolean(a.texto || a.titulo))
+    .filter((a) => mediaContaCents == null || a.custo_cadastro_cents! <= mediaContaCents * BASE_CPL_MAX_FATOR)
+    .sort((a, b) => a.custo_cadastro_cents! - b.custo_cadastro_cents! || b.cadastros_28d - a.cadastros_28d);
 }
 
 const n = (v: unknown): number => Number(v ?? 0) || 0;
 
-export async function montarBiblioteca(db: D1Database, agora = new Date()): Promise<Biblioteca> {
+/** Anúncios da Meta com gasto e cadastros dos últimos 28 dias; com `soId`, só aquele anúncio. */
+export async function lerAnuncios(db: D1Database, agora = new Date(), soId?: string): Promise<AnuncioReferencia[]> {
   const de = diaBrt(addDays(agora, -27));
   const r = await db
     .prepare(
@@ -42,21 +58,26 @@ export async function montarBiblioteca(db: D1Database, agora = new Date()): Prom
          COALESCE(SUM(d.gasto_cents), 0) AS gasto, COALESCE(SUM(d.resultados), 0) AS cadastros,
          (SELECT COUNT(*) FROM ads_criativos c WHERE c.ad_id = a.anuncio_id) AS do_criador
        FROM ads_anuncios a LEFT JOIN ads_anuncio_diario d ON d.plataforma = a.plataforma AND d.anuncio_id = a.anuncio_id AND d.dia >= ?1
-       WHERE a.plataforma = 'meta' GROUP BY a.anuncio_id`,
+       WHERE a.plataforma = 'meta' AND (?2 IS NULL OR a.anuncio_id = ?2) GROUP BY a.anuncio_id`,
     )
-    .bind(de)
+    .bind(de, soId ?? null)
     .all<Record<string, unknown>>();
-  const todos: AnuncioReferencia[] = r.results.map((x) => {
+  return r.results.map((x) => {
     const gasto = n(x.gasto), cad = n(x.cadastros);
     return { anuncio_id: String(x.anuncio_id), anuncio: String(x.anuncio), status: x.status == null ? null : String(x.status), titulo: x.titulo == null ? null : String(x.titulo), texto: x.texto == null ? null : String(x.texto), gasto_28d: gasto, cadastros_28d: cad, custo_cadastro_cents: cad > 0 ? Math.round(gasto / cad) : null, gerado_pelo_criador: n(x.do_criador) > 0 };
   });
+}
+
+export async function montarBiblioteca(db: D1Database, agora = new Date()): Promise<Biblioteca> {
+  const todos = await lerAnuncios(db, agora);
   const comTexto = todos.filter((a) => a.gasto_28d >= BIBLIOTECA_GASTO_MIN_CENTS && (a.texto || a.titulo));
   const comCadastro = comTexto.filter((a) => a.custo_cadastro_cents != null).sort((a, b) => a.custo_cadastro_cents! - b.custo_cadastro_cents!);
   const semCadastro = comTexto.filter((a) => a.custo_cadastro_cents == null).sort((a, b) => b.gasto_28d - a.gasto_28d);
   const gastoTotal = comCadastro.reduce((s, a) => s + a.gasto_28d, 0), cadTotal = comCadastro.reduce((s, a) => s + a.cadastros_28d, 0);
   const melhores = comCadastro.filter((a) => a.cadastros_28d >= BIBLIOTECA_CADASTROS_MIN).slice(0, BIBLIOTECA_TOP);
   const pioresBase = [...semCadastro, ...comCadastro.slice().reverse()].filter((a) => !melhores.includes(a)).slice(0, BIBLIOTECA_TOP);
-  return { melhores, piores: pioresBase, do_criador: todos.filter((a) => a.gerado_pelo_criador), media_conta_cents: cadTotal > 0 ? Math.round(gastoTotal / cadTotal) : null };
+  const media = cadTotal > 0 ? Math.round(gastoTotal / cadTotal) : null;
+  return { melhores, piores: pioresBase, do_criador: todos.filter((a) => a.gerado_pelo_criador), media_conta_cents: media, bases: basesQueConvertem(comCadastro, media) };
 }
 
 const reais = (c: number | null): string => (c == null ? "sem cadastro" : `R$ ${(c / 100).toFixed(2).replace(".", ",")}`);
@@ -73,4 +94,14 @@ export function bibliotecaParaModelo(b: Biblioteca): string {
   const meus = b.do_criador.filter((a) => a.gasto_28d > 0);
   if (meus.length) partes.push(`CRIATIVOS ANTERIORES DO CRIADOR:\n${meus.map(bloco).join("\n")}`);
   return partes.join("\n\n");
+}
+
+/** O anúncio base no prompt do Criador: a copy nova é uma variação dele, não uma ideia do zero. */
+export function baseParaModelo(a: AnuncioReferencia): string {
+  return `ANÚNCIO BASE (${a.custo_cadastro_cents == null ? "ainda sem cadastro; escolhido à mão" : `${reais(a.custo_cadastro_cents)} por cadastro, ${a.cadastros_28d} cadastros em 28 dias`}):
+"${a.anuncio}"
+  Título: ${a.titulo ?? "—"}
+  Texto: ${(a.texto ?? "—").replace(/\s+/g, " ").slice(0, 600)}
+
+Sua copy é uma VARIAÇÃO deste anúncio: mantenha a dor, a promessa central e o público dele; mude a abertura, a frase da imagem e o detalhe que o ÂNGULO pede. Se o ângulo puxar para uma ideia que o anúncio base não tem, fique com a ideia do anúncio base. Não copie frases inteiras.`;
 }

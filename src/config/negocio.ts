@@ -45,6 +45,33 @@ export const TEMPLATE_CONVERSAS: Array<{ iniciais: string; cor: string; nome: st
   { iniciais: "CM", cor: "#3E9E8A", nome: "Cliente · Mercado", setor: "Suporte", tom: "t2", mensagem: "Ainda aguardo retorno…", hora: "ontem", badge: "5" },
   { iniciais: "EE", cor: "#8B979D", nome: "Ex-equipe · histórico antigo", setor: "", tom: "t2", mensagem: "Conversas de clientes no celular de quem saiu", hora: "seg", badge: "" },
 ];
+/**
+ * Vídeo do Criador ("tela do produto", templates/chat_sistema.ts): a conversa acontece numa imitação da tela do
+ * SEU sistema. Troque o endereço, o menu, as abas, as conversas da lista e as cores pelos do seu produto (tire um
+ * print da sua tela de atendimento e copie os nomes). Ícones disponíveis: grade, fone, balao, predio, pessoa,
+ * rede, arvore, megafone, grafico, engrenagem, diamante, peca. O item ativo do menu é o que tem ativo: true.
+ */
+export const TELA_PRODUTO = {
+  url: "app.suaempresa.com.br/chat",
+  titulo_tela: "Chat",
+  menu: [
+    { nome: "Dashboard", icone: "grade" }, { nome: "Atendimentos", icone: "fone" }, { nome: "Chat", icone: "balao", ativo: true },
+    { nome: "Clientes", icone: "predio", submenu: true }, { nome: "Equipe", icone: "pessoa" }, { nome: "Setores", icone: "arvore" },
+    { nome: "Relatórios", icone: "grafico", submenu: true }, { nome: "Configurações", icone: "engrenagem" },
+  ] as Array<{ nome: string; icone: string; ativo?: boolean; submenu?: boolean; selo?: string } | null>,
+  abas: [["Atendendo", "12"], ["Espera", "1"], ["Contatos", ""], ["Interno", "2"]] as Array<[string, string]>,
+  /** Outras conversas da lista (nome, última mensagem, hora, selo). Inventadas. */
+  conversas: [["Carla Ribeiro", "Obrigada, recebi!", "12:09", "Normal"], ["Tânia", "Pode confirmar o horário?", "11:26", "Normal"], ["Sérgio", "Obrigado!", "11:22", "Normal"], ["Loja Centro Sul", "Perfeito", "11:19", "Normal"], ["Lúcia", "Bom dia! Tudo certo", "10:59", "Normal"], ["Rafael Lima", "Entendi, por qual banco?", "10:59", "Normal"], ["Bruno Almeida", "Ainda aguardo o retorno", "10:46", "Urgente"], ["Paula Martins", "Mensagem de voz", "09:45", "Normal"]] as Array<[string, string, string, string]>,
+  /** Linha do cabeçalho da conversa; {setor} vira o setor da conversa. */
+  origem: "Atendimento aberto via whatsapp  |  *{setor}*",
+  botoes: ["⇄ Transferir", "◷ Prioridade", "⊘ Fechar", "⊗ Cancelar"],
+  campo: "Digite sua mensagem aqui",
+  /** Texto do botão e a unidade do preço grande (o valor sai de PRECO_LINHA). */
+  botao: "Teste grátis · sem cartão",
+  unidade_preco: "por mês",
+  cores: { fundo: "#1E8A4C", fundo_fim: "#0A4424", destaque: "#8BE38A", ui: "#2BA84A", balao_atendente: "#CFEFDB", fundo_chat: "#E6F2EA" },
+};
+
 /** Cabeçalho do "celular" no template. */
 export const TEMPLATE_CABECALHO = { titulo: "WhatsApp · celular do dono", nota: "tudo misturado" };
 

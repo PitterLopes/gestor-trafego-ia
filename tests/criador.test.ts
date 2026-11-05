@@ -1,10 +1,14 @@
 import test from "node:test";
+import { TELA_PRODUTO } from "../src/config/negocio.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { acaoCriativo, lerCopy, metaPublicacaoConfigurada, registrarPedido, rodarCriador, verificarPorRegras } from "../src/agentes/criador.ts";
 import type { Copy, CriadorEnv } from "../src/agentes/criador.ts";
 import { htmlEscritorio, tituloComDestaque } from "../src/agentes/templates/escritorio.ts";
+import { atualizarReferencias, escolherReferencias, imagensDoAnuncio, lerIndice, referenciaManual, referenciasParaModelo, removerReferenciaManual } from "../src/agentes/referencia.ts";
+import type { AnuncioReferencia } from "../src/agentes/biblioteca.ts";
+import { lerPlano } from "../src/agentes/analista_ia.ts";
 
 /**
  * Criador (src/agentes/criador.ts): esquema da copy, regras do verificador, template, e a rodada inteira
@@ -30,13 +34,23 @@ function d1Falso(db: DatabaseSync): D1Database {
 
 function r2Falso(): { bucket: R2Bucket; guardados: Map<string, Uint8Array> } {
   const guardados = new Map<string, Uint8Array>();
-  const bucket = { put: async (k: string, v: Uint8Array) => { guardados.set(k, v); return null; }, get: async (k: string) => (guardados.has(k) ? { body: guardados.get(k), arrayBuffer: async () => guardados.get(k)!.buffer } : null) } as unknown as R2Bucket;
+  const bucket = {
+    put: async (k: string, v: Uint8Array | string) => { guardados.set(k, typeof v === "string" ? new TextEncoder().encode(v) : v); return null; },
+    get: async (k: string) => (guardados.has(k) ? { body: guardados.get(k), arrayBuffer: async () => guardados.get(k)!.slice().buffer, text: async () => new TextDecoder().decode(guardados.get(k)) } : null),
+  } as unknown as R2Bucket;
   return { bucket, guardados };
 }
 
-function banco(extra: Partial<CriadorEnv> = {}): { env: CriadorEnv; sqlite: DatabaseSync; r2: Map<string, Uint8Array> } {
+/** Anúncio da conta com gasto e cadastros (lead) nos últimos 28 dias, como a coleta grava. */
+function anuncioComLeads(sqlite: DatabaseSync, id: string, nome: string, texto: string | null, gastoCents: number, leads: number, dia = "2026-10-20"): void {
+  sqlite.prepare("INSERT INTO ads_anuncios (plataforma, anuncio_id, anuncio, status, titulo, texto, atualizado_em) VALUES ('meta', ?, ?, 'ACTIVE', ?, ?, 't')").run(id, nome, texto ? `Título de ${nome}` : null, texto);
+  sqlite.prepare("INSERT INTO ads_anuncio_diario (dia, plataforma, anuncio_id, gasto_cents, resultados, atualizado_em) VALUES (?, 'meta', ?, ?, ?, 't')").run(dia, id, gastoCents, leads);
+}
+
+function banco(extra: Partial<CriadorEnv> = {}, opts: { semBase?: boolean } = {}): { env: CriadorEnv; sqlite: DatabaseSync; r2: Map<string, Uint8Array> } {
   const sqlite = new DatabaseSync(":memory:");
-  for (const m of ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql", "0008_negocio.sql", "0009_feedback_video.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8"));
+  for (const m of ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql", "0004_agentes.sql", "0005_criador.sql", "0006_biblioteca.sql", "0007_equipe.sql", "0008_negocio.sql", "0009_feedback_video.sql", "0010_referencia.sql", "0011_video_story.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8"));
+  if (!opts.semBase) anuncioComLeads(sqlite, "win1", "EscritorioMock_4x5", "Seu escritório ainda atende pelo WhatsApp pessoal do sócio?", 260_000, 140);
   const { bucket, guardados } = r2Falso();
   return { env: { DB: d1Falso(sqlite), CRIATIVOS: bucket, META_VIDEO_ESPERA_MS: "0", OPENROUTER_API_KEY: "or", META_ADS_TOKEN: "tk", META_AD_ACCOUNT_ID: "123", META_PAGE_ID: "p1", META_ADSET_CRIADOR_ID: "as1", CRIADOR_LINK: "https://exemplo.com.br", ...extra }, sqlite, r2: guardados };
 }
@@ -83,8 +97,8 @@ function fetchFalso(opts: { copy?: unknown; verificacao?: unknown; meta?: "ok" |
       const ehVerificador = j.messages[0].content.includes("revisa textos");
       return ehVerificador ? respostaLlm(opts.verificacao ?? { aprovado: true, problemas: [] }, "anthropic/claude-haiku-5.5") : respostaLlm(opts.copy ?? COPY_OK, "anthropic/claude-sonnet-5.5");
     }
-    if (url.endsWith("/advideos")) return resposta({ id: "vid5" });
-    if (/\/vid5\?fields=status$/.test(url)) return resposta({ status: { video_status: "ready" } });
+    if (url.endsWith("/advideos")) return resposta({ id: `vid${4 + chamadas.filter((c) => c.url.endsWith("/advideos")).length}` });
+    if (/\/vid\d+\?fields=status$/.test(url)) return resposta({ status: { video_status: "ready" } });
     if (url.endsWith("/adimages")) return opts.meta === "erro_imagem" ? resposta({ error: { message: "imagem inválida" } }, 400) : resposta({ images: { "x.png": { hash: "h123" } } });
     if (url.endsWith("/adcreatives")) return resposta({ id: "cr9" });
     if (url.endsWith("/ads")) return resposta({ id: "ad7" });
@@ -187,23 +201,34 @@ test("erro da Meta na imagem fica registrado como erro, sem anúncio", async () 
   assert.ok(!f.chamadas.some((x) => x.url.endsWith("/ads")));
 });
 
-test("vídeo: pedido em formato vídeo grava o chat animado (WebM + capa no R2) e publica por advideos → video_data", async () => {
+test("vídeo: grava a tela de chat do sistema em 1:1 e 9:16 e publica um anúncio com os dois por posicionamento", async () => {
   const { env, sqlite, r2 } = banco();
   const pedido = await registrarPedido(env.DB, "2026-10-29", "estrategista", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "a conversa acontecendo", motivo: "reels", formato: "video" });
   assert.notEqual(await registrarPedido(env.DB, "2026-10-29", "estrategista", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "a conversa acontecendo", motivo: "reels" }), pedido, "mesmo ângulo em outro formato é outro pedido");
-  const f = fetchFalso({ copy: COPY_VIDEO });
+  const f = fetchFalso({ copy: { ...COPY_VIDEO, contato: "Marcos Padaria", conversa: [...COPY_VIDEO.conversa, { de: "evento", texto: "Ana transferiu para Pessoal" }] } });
   const semGravador = await rodarCriador(env, 2, { renderPng: renderFalso, fetchFn: f.fn, agora: AGORA, soPedido: pedido });
   assert.equal(semGravador.erros, 1, "sem gravador de vídeo o pedido fica com erro, não publica");
   sqlite.exec("DELETE FROM ads_criativos; UPDATE ads_pedidos_criativo SET status = 'pendente'");
-  const r = await rodarCriador(env, 2, { renderPng: renderFalso, renderWebm: renderWebmFalso, fetchFn: f.fn, agora: AGORA, soPedido: pedido });
+  const gravados: Array<{ html: string; w: number; h: number }> = [];
+  const gravador = async (html: string, w: number, h: number) => { gravados.push({ html, w, h }); return renderWebmFalso(html); };
+  const r = await rodarCriador(env, 2, { renderPng: renderFalso, renderWebm: gravador, fetchFn: f.fn, agora: AGORA, soPedido: pedido });
   assert.equal(r.publicados, 1, JSON.stringify(r));
-  assert.ok(f.chamadas.find((c) => c.url.includes("openrouter"))!.corpo.includes("FORMATO: video"));
-  assert.ok(r2.has("criativos/2.webm") && r2.has("criativos/2-capa.png"));
-  const c = sqlite.prepare("SELECT formato, video_chave, video_id, ad_id, status FROM ads_criativos WHERE id = 2").get() as Record<string, string>;
-  assert.deepEqual({ ...c }, { formato: "video", video_chave: "criativos/2.webm", video_id: "vid5", ad_id: "ad7", status: "publicado" });
-  const criativo = f.chamadas.find((x) => x.url.endsWith("/adcreatives"))!.corpo;
-  assert.ok(criativo.includes("video_data") && criativo.includes("vid5") && criativo.includes("h123"));
-  assert.equal(lerCopy({ ...COPY_OK, conversa: COPY_VIDEO.conversa.slice(0, 2) }, "video"), null, "vídeo exige pelo menos 4 mensagens");
+  assert.deepEqual(gravados.map((g) => [g.w, g.h]), [[1080, 1080], [1080, 1920]]);
+  for (const g of gravados) {
+    assert.ok(g.html.includes(TELA_PRODUTO.url), "é a tela do produto, não o WhatsApp");
+    assert.ok(g.html.includes("Marcos Padaria") && g.html.includes("Ana transferiu para Pessoal"));
+  }
+  const prompt = f.chamadas.find((c) => c.url.includes("openrouter"))!.corpo;
+  assert.ok(prompt.includes("FORMATO: video") && prompt.includes("TELA DE CHAT DO PRODUTO"));
+  for (const k of ["criativos/2.webm", "criativos/2-capa.png", "criativos/2-story.webm", "criativos/2-story-capa.png"]) assert.ok(r2.has(k), k);
+  const c = sqlite.prepare("SELECT formato, video_chave, video_story_chave, video_id, video_story_id, ad_id, status FROM ads_criativos WHERE id = 2").get() as Record<string, string>;
+  assert.deepEqual({ ...c }, { formato: "video", video_chave: "criativos/2.webm", video_story_chave: "criativos/2-story.webm", video_id: "vid5", video_story_id: "vid6", ad_id: "ad7", status: "publicado" });
+  const criativo = new URLSearchParams(f.chamadas.find((x) => x.url.endsWith("/adcreatives"))!.corpo);
+  const feed = JSON.parse(criativo.get("asset_feed_spec")!) as { videos: Array<{ video_id: string; adlabels: Array<{ name: string }> }>; asset_customization_rules: Array<{ customization_spec: { instagram_positions: string[] }; video_label: { name: string } }> };
+  assert.deepEqual(feed.videos.map((v) => [v.video_id, v.adlabels[0].name]), [["vid5", "dd_quadrado"], ["vid6", "dd_story"]]);
+  assert.deepEqual(feed.asset_customization_rules.map((x) => x.video_label.name), ["dd_story", "dd_quadrado"]);
+  assert.ok(feed.asset_customization_rules[0].customization_spec.instagram_positions.includes("story"));
+  assert.equal(f.chamadas.filter((x) => x.url.endsWith("/advideos")).length, 2, "subiu os dois vídeos");
 });
 
 test("aprovação: publicar um criativo em sombra sobe a imagem guardada e cria o anúncio; não publica duas vezes", async () => {
@@ -244,4 +269,168 @@ test("verificador: trechos listados como 'sem problema' não reprovam, mesmo com
   const { env: env2 } = banco();
   await registrarPedido(env2.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "x", motivo: "m" });
   assert.equal((await rodarCriador(env2, 1, { renderPng: renderFalso, fetchFn: g.fn, agora: AGORA })).reprovados, 1, "problema de verdade reprova mesmo com aprovado=true");
+});
+
+// ---------- base das variações: anúncio que converte em lead ----------
+
+test("criador: a variação parte do anúncio que mais traz lead pelo menor custo, que vai no prompt e fica registrado", async () => {
+  const { env, sqlite } = banco();
+  // gastou muito e não trouxe lead; e um que trouxe lead mas caro demais: nenhum dos dois serve de base
+  anuncioComLeads(sqlite, "zero", "SemLead_4x5", "Texto que não converte.", 90_000, 0);
+  anuncioComLeads(sqlite, "caro", "Caro_4x5", "Texto caro.", 120_000, 6);
+  await registrarPedido(env.DB, "2026-10-29", "analista_ia", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "equipe de 3 ou mais atendentes", motivo: "teste" });
+  const f = fetchFalso();
+  const r = await rodarCriador(env, 1, { renderPng: renderFalso, fetchFn: f.fn, agora: AGORA });
+  assert.equal(r.gerados, 1);
+  const promptCriador = f.chamadas.find((c) => c.url.includes("openrouter") && !c.corpo.includes("revisa textos"))!.corpo;
+  assert.match(promptCriador, /ANÚNCIO BASE/);
+  assert.match(promptCriador, /EscritorioMock_4x5/);
+  assert.match(promptCriador, /R\$ 18,57 por cadastro, 140 cadastros/);
+  assert.match(promptCriador, /VARIAÇÃO deste anúncio/);
+  const c = sqlite.prepare("SELECT angulo FROM ads_criativos").get() as { angulo: string };
+  assert.match(c.angulo, /^variação de "EscritorioMock_4x5" \(win1\) · equipe de 3/);
+});
+
+test("criador: sem anúncio que converte, pedido de agente espera; pedido da pessoa segue", async () => {
+  const { env, sqlite } = banco({}, { semBase: true });
+  anuncioComLeads(sqlite, "poucos", "PoucosLeads", "Texto.", 50_000, 3); // 3 leads: pouco para ter confiança
+  await registrarPedido(env.DB, "2026-10-29", "estrategista", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "ângulo novo", motivo: "plano" });
+  const r = await rodarCriador(env, 1, { renderPng: renderFalso, fetchFn: fetchFalso().fn, agora: AGORA });
+  assert.deepEqual([r.gerados, r.detalhes[0].status], [0, "adiado"]);
+  assert.match(r.detalhes[0].nota, /cadastros suficientes/);
+  const pendente = sqlite.prepare("SELECT status FROM ads_pedidos_criativo").get() as { status: string };
+  assert.equal(pendente.status, "pendente", "fica pendente para quando houver base");
+  await registrarPedido(env.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "pedido do dono", motivo: "manual" });
+  const r2 = await rodarCriador(env, 1, { renderPng: renderFalso, fetchFn: fetchFalso().fn, agora: AGORA, soPedido: 2 });
+  assert.equal(r2.gerados, 1);
+});
+
+// ---------- pasta de referência ----------
+
+const ANALISE_OK = {
+  tipo_visual: "tela_de_chat",
+  descricao: "Tela do sistema com conversas por setor; à direita, o chat do Fiscal respondendo a guia do DAS.",
+  elementos_que_prendem: ["setor e atendente no topo", "protocolo na conversa"],
+  por_que_converte: "Mostra o produto real resolvendo a dor do WhatsApp misturado.",
+  variacoes: [{ formato: "video", angulo: "A mesma conversa acontecendo mensagem por mensagem", o_que_muda: "vira vídeo; mesma tela" }, { formato: "imagem", angulo: "Mesma tela com o setor Financeiro", o_que_muda: "troca o setor" }],
+};
+const JPG = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
+
+/** fetch falso da pasta: Meta (anúncio → criativo de vídeo do Advantage+ → hash → adimages), download da imagem e o modelo. */
+function fetchReferencia(opts: { imagem?: Uint8Array } = {}) {
+  const chamadas: Array<{ url: string; corpo: string }> = [];
+  const fn = (async (url: string, init?: RequestInit) => {
+    const corpo = String(init?.body ?? "");
+    chamadas.push({ url, corpo });
+    if (url.includes("openrouter")) {
+      const j = JSON.parse(corpo) as { messages: Array<{ content: unknown }> };
+      const sistema = String(j.messages[0].content);
+      if (sistema.includes("Você analisa anúncios")) return respostaLlm(ANALISE_OK, "anthropic/claude-sonnet-5.5");
+      if (sistema.includes("revisa textos")) return respostaLlm({ aprovado: true, problemas: [] }, "anthropic/claude-haiku-5.5");
+      return respostaLlm(COPY_VIDEO, "anthropic/claude-sonnet-5.5");
+    }
+    if (/\/(win1|chat1)\?fields=creative/.test(url)) return resposta({ creative: { id: url.includes("chat1") ? "crChat" : "crWin" } });
+    if (/\/crWin\?fields=/.test(url)) return resposta({ thumbnail_url: "https://cdn.test/mini64.jpg", asset_feed_spec: { images: [{ hash: "hWin" }], videos: [] } });
+    if (/\/crChat\?fields=/.test(url)) return resposta({ image_url: "https://cdn.test/chat.png" });
+    if (url.includes("/adimages?hashes=")) return resposta({ data: [{ url: "https://cdn.test/win1080.jpg", width: 1080, height: 1350 }] });
+    if (url.startsWith("https://cdn.test/")) return new Response(opts.imagem ?? JPG, { status: 200, headers: { "content-type": url.endsWith(".png") ? "image/png" : "image/jpeg" } });
+    return resposta({}, 404);
+  }) as unknown as typeof fetch;
+  return { fn, chamadas };
+}
+
+const ref = (id: string, leads: number, cpl: number): AnuncioReferencia => ({ anuncio_id: id, anuncio: id, status: "ACTIVE", titulo: null, texto: "t", gasto_28d: leads * cpl, cadastros_28d: leads, custo_cadastro_cents: cpl, gerado_pelo_criador: false });
+
+test("escolherReferencias: os 2 que mais trazem cadastro; empate vai para o mais barato", () => {
+  assert.deepEqual(escolherReferencias([ref("barato_pouco", 7, 2600), ref("campeao", 143, 1822), ref("segundo", 28, 3072)]).map((a) => a.anuncio_id), ["campeao", "segundo"]);
+  assert.deepEqual(escolherReferencias([ref("a", 10, 3000), ref("b", 10, 2000)], 1).map((a) => a.anuncio_id), ["b"]);
+});
+
+test("imagensDoAnuncio: Advantage+ sem imagem direta → o hash em adimages (1080) vem antes da miniatura de 64px", async () => {
+  const { env } = banco();
+  const img = await imagensDoAnuncio(env, "win1", fetchReferencia().fn);
+  assert.deepEqual(img, { urls: ["https://cdn.test/win1080.jpg", "https://cdn.test/mini64.jpg"], midia: "imagem" });
+});
+
+test("vídeo: capa que abre página do Facebook (HTML) é pulada e a próxima URL com imagem é a que fica", async () => {
+  const { env, sqlite, r2 } = banco({}, { semBase: true });
+  anuncioComLeads(sqlite, "vid1", "CampeaoVideo", "Texto do vídeo.", 260_000, 140);
+  const base = fetchReferencia().fn;
+  const fn = (async (url: string, init?: RequestInit) => {
+    if (/\/vid1\?fields=creative/.test(url)) return resposta({ creative: { id: "crVid" } });
+    if (/\/crVid\?fields=/.test(url)) return resposta({ thumbnail_url: "https://cdn.test/mini64.jpg", object_story_spec: { video_data: { video_id: "v9", image_url: "https://www.facebook.com/ads/image/?d=x" } } });
+    if (/\/v9\?fields=/.test(url)) return resposta({ error: { message: "sem permissão no vídeo" } }, 400); // miniaturas fora: sobram a capa (HTML) e a miniatura do criativo
+    if (url.startsWith("https://www.facebook.com/")) return new Response("<!DOCTYPE html><html></html>", { status: 200, headers: { "content-type": "text/html" } });
+    return base(url, init);
+  }) as unknown as typeof fetch;
+  const r = await atualizarReferencias(env, fn, AGORA);
+  assert.deepEqual(r.erros, []);
+  assert.equal(r.referencias[0].midia, "video");
+  assert.deepEqual(r2.get("referencia/vid1.jpg"), JPG);
+  assert.ok(![...r2.values()].some((v) => new TextDecoder().decode(v).startsWith("<!DOCTYPE")), "HTML não entra na pasta");
+});
+
+test("atualizarReferencias: baixa a imagem para o R2, o modelo vê a imagem, e a análise é reaproveitada se a imagem não mudou", async () => {
+  const { env, r2 } = banco();
+  const f = fetchReferencia();
+  const r = await atualizarReferencias(env, f.fn, AGORA);
+  assert.deepEqual(r.erros, []);
+  assert.equal(r.referencias[0].anuncio_id, "win1");
+  assert.equal(r.referencias[0].imagem_chave, "referencia/win1.jpg");
+  assert.deepEqual(r2.get("referencia/win1.jpg"), JPG);
+  assert.equal(r.referencias[0].analise?.tipo_visual, "tela_de_chat");
+  const pedidoModelo = JSON.parse(f.chamadas.find((c) => c.url.includes("openrouter"))!.corpo) as { messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }> };
+  assert.equal(pedidoModelo.messages[1].content[1].type, "image_url");
+  assert.match(pedidoModelo.messages[1].content[1].image_url!.url, /^data:image\/jpeg;base64,/);
+  // de novo, mesma imagem: não chama o modelo
+  const f2 = fetchReferencia();
+  await atualizarReferencias(env, f2.fn, AGORA);
+  assert.equal(f2.chamadas.filter((c) => c.url.includes("openrouter")).length, 0);
+  // imagem nova: analisa de novo
+  const f3 = fetchReferencia({ imagem: new Uint8Array([9, 9, 9]) });
+  await atualizarReferencias(env, f3.fn, AGORA);
+  assert.equal(f3.chamadas.filter((c) => c.url.includes("openrouter")).length, 1);
+  const pasta = await lerIndice(env);
+  assert.deepEqual(pasta.referencias.map((x) => x.anuncio_id), ["win1"]);
+  const txt = referenciasParaModelo(pasta.referencias);
+  assert.match(txt, /PASTA DE REFERÊNCIA/);
+  assert.match(txt, /anuncio_base win1/);
+  assert.match(txt, /tela de chat/);
+  assert.match(txt, /\[video\] A mesma conversa/);
+});
+
+test("criador: pedido com base à mão (chat sem cadastro ainda) vira vídeo vendo a imagem do chat", async () => {
+  const { env, sqlite } = banco();
+  anuncioComLeads(sqlite, "chat1", "PrintDaTela_Chat_v1", null, 200, 0);
+  await registrarPedido(env.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "transformar a tela de chat em vídeo", motivo: "pedido do dono", formato: "video", anuncio_base: "chat1" });
+  const f = fetchReferencia();
+  const r = await rodarCriador(env, 1, { renderPng: renderFalso, renderWebm: renderWebmFalso, fetchFn: f.fn, agora: AGORA });
+  assert.equal(r.gerados, 1, JSON.stringify(r.detalhes));
+  const corpos = f.chamadas.filter((c) => c.url.includes("openrouter")).map((c) => JSON.parse(c.corpo) as { messages: Array<{ content: unknown }> });
+  const criador = corpos.find((c) => String(c.messages[0].content).startsWith("Você escreve anúncios"))!;
+  const partes = criador.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+  assert.match(partes[0].text!, /ANÚNCIO BASE \(ainda sem cadastro; escolhido à mão\)/);
+  assert.match(partes[0].text!, /O QUE O ANÚNCIO BASE MOSTRA/);
+  assert.match(partes[0].text!, /VÍDEO A PARTIR DO ANÚNCIO BASE/);
+  assert.match(partes[1].image_url!.url, /^data:image\/png;base64,/);
+  const c = sqlite.prepare("SELECT anuncio_base, formato FROM ads_criativos").get() as { anuncio_base: string; formato: string };
+  assert.deepEqual([c.anuncio_base, c.formato], ["chat1", "video"]);
+});
+
+test("analista: o pedido de criativo traz anuncio_base e formato", () => {
+  const p = lerPlano({ resumo: "ok", acoes: [], pedidos_criativo: [{ campanha_id: "C", anuncio_base: "win1", formato: "video", angulo: "mesma tela em vídeo", motivo: "campeão" }] });
+  assert.deepEqual(p?.pedidos_criativo[0], { campanha_id: "C", angulo: "mesma tela em vídeo", motivo: "campeão", anuncio_base: "win1", formato: "video" });
+});
+
+test("pasta: anúncio fixado à mão (a tela de chat real) fica na pasta mesmo sem cadastro e sobrevive à atualização", async () => {
+  const { env, sqlite } = banco();
+  anuncioComLeads(sqlite, "chat1", "PrintDaTela_Chat_v1", null, 200, 0);
+  await atualizarReferencias(env, fetchReferencia().fn, AGORA);
+  assert.ok(await referenciaManual(env, "chat1", fetchReferencia().fn, AGORA));
+  await atualizarReferencias(env, fetchReferencia().fn, AGORA);
+  const pasta = await lerIndice(env);
+  assert.deepEqual(pasta.referencias.map((r) => [r.anuncio_id, r.escolhido]), [["win1", "leads"], ["chat1", "manual"]]);
+  assert.match(referenciasParaModelo(pasta.referencias), /chat1: "PrintDaTela_Chat_v1" · FIXADO PELO DONO/);
+  assert.equal(await removerReferenciaManual(env, "chat1"), true);
+  assert.deepEqual((await lerIndice(env)).referencias.map((r) => r.anuncio_id), ["win1"]);
 });
