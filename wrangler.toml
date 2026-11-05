@@ -6,7 +6,7 @@ workers_dev = true
 
 # 03:00 de Brasília (06:00 UTC): coleta + regras + time. Nas outras horas, só o Vigia.
 [triggers]
-crons = ["0 6 * * *", "20 * * * *"]
+crons = ["0 6 * * *", "20 * * * *", "*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

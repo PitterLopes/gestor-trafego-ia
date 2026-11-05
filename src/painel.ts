@@ -22,7 +22,16 @@ export function paginaPainel(p: Record<string, unknown>, m: Metricas, x: ExtrasP
   const acoes = ((p.acoes as { acoes?: Array<Record<string, unknown>> })?.acoes ?? []).slice(0, 30);
   // só o que importa agora: no ar (publicado e ativo na Meta) e aguardando aprovação; reprovado, erro e pausado
   // ficam fora (o histórico continua em /admin/agentes e ensina o Criador)
-  const criativos = ((p.criativos as Array<Record<string, unknown>>) ?? []).filter((c) => (c.status === "sombra" && Boolean(c.imagem_chave || c.video_chave)) || (c.status === "publicado" && (c.status_anuncio == null || STATUS_EM_CIRCULACAO.includes(String(c.status_anuncio))))).slice(0, 12);
+  // resultado do anúncio desde a publicação (coleta por anúncio, ads_anuncio_diario)
+  const centavos = (v: number) => `R$ ${(v / 100).toFixed(2).replace(".", ",")}`;
+  const resultado = (c: Record<string, unknown>): string => {
+    if (c.status === "publicando") return "<p>Vídeos enviados. A Meta está processando; o anúncio é criado sozinho em alguns minutos.</p>";
+    if (c.status !== "publicado") return "";
+    const g = Number(c.res_gasto_cents ?? 0), cad = Number(c.res_cadastros ?? 0), cl = Number(c.res_cliques ?? 0), im = Number(c.res_impressoes ?? 0);
+    if (!g && !im) return '<p class="res"><b>Resultado:</b> ainda sem entrega registrada</p>';
+    return `<p class="res"><b>Resultado desde a publicação${c.res_ate ? ` (até ${esc(c.res_ate)})` : ""}:</b> ${cad} cadastros · ${cad ? centavos(Math.round(g / cad)) : "—"} por cadastro · ${centavos(g)} gastos · ${cl} cliques · ${im.toLocaleString("pt-BR")} impressões</p>`;
+  };
+  const criativos = ((p.criativos as Array<Record<string, unknown>>) ?? []).filter((c) => ((c.status === "sombra" || c.status === "publicando") && Boolean(c.imagem_chave || c.video_chave)) || (c.status === "publicado" && (c.status_anuncio == null || STATUS_EM_CIRCULACAO.includes(String(c.status_anuncio))))).slice(0, 12);
   const alertas = ((p.alertas as Array<Record<string, unknown>>) ?? []).slice(0, 10);
   const execucoes = ((p.execucoes as Array<Record<string, unknown>>) ?? []).slice(0, 12);
   const publicos = (p.publicos as Array<Record<string, unknown>>) ?? [];
@@ -42,7 +51,7 @@ h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:0 0 10px}.sub{color:#5
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 8px;border-top:1px solid #eef2f0;text-align:left;vertical-align:top}th{color:#5a6b73;font-weight:600}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#e6eeea}.bom{background:#e7f6ec;color:#0e6b3a}.ruim{background:#fdecea;color:#b42318}.atencao{background:#fff3df;color:#8a5100}
 .criativos{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}.criativo img,.criativo video{width:100%;aspect-ratio:4/5;object-fit:cover;border-radius:8px;border:1px solid #d9e2dd;background:#000}.criativo video{aspect-ratio:9/16}.criativo p{font-size:13px;color:#5a6b73;margin:6px 0 0;white-space:pre-line}
-.midias{display:grid;grid-template-columns:1fr .5625fr;gap:8px;align-items:start}.midias figure{margin:0;min-width:0}.midias figcaption{font-size:12px;color:#5f6d66;text-align:center;margin-top:4px}.criativo .midias video.q{aspect-ratio:1/1;object-fit:contain}.criativo .midias video.s{aspect-ratio:9/16;object-fit:contain}@media (min-width:760px){.criativo.duplo{grid-column:span 2}}
+.midias{display:grid;grid-template-columns:1fr .5625fr;gap:8px;align-items:start}.midias figure{margin:0;min-width:0}.midias figcaption{font-size:12px;color:#5f6d66;text-align:center;margin-top:4px}.criativo .midias video.q{aspect-ratio:1/1;object-fit:contain}.criativo .midias video.s{aspect-ratio:9/16;object-fit:contain}@media (min-width:760px){.criativo.duplo{grid-column:span 2}}.criativo p.res{background:#f1f5f3;border-radius:8px;padding:6px 8px;color:#2d3a33}
 .acoes{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.acoes form{display:contents}.acoes button{border:0;border-radius:8px;padding:8px 10px;font-weight:600;cursor:pointer;font-size:13px}.b1{background:#0e6b3a;color:#fff}.b2{background:#fdecea;color:#b42318}.b3{background:#e6eeea;color:#1e333b}
 .criativo textarea{width:100%;box-sizing:border-box;margin-top:8px;border:1px solid #c9d4ce;border-radius:8px;padding:8px;font:inherit;font-size:13px}
 .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5a6b73}.aviso{background:#fff3df;border:1px solid #f2cf94;border-radius:8px;padding:10px 12px;margin:0 0 16px}
@@ -82,7 +91,7 @@ ${m.coortes.length ? `<h2 style="margin-top:16px">Coortes: de quem virou cliente
       : c.imagem_chave ? `<img src="/painel/criativos/${esc(c.id)}.png${q}" alt="">` : "";
     const form = (acao: string, cls: string, rot: string) => `<form method="post" action="/painel/criativos/${esc(c.id)}/${acao}${q}"><button class="${cls}" type="submit">${rot}</button></form>`;
     const botoes = c.status === "sombra" ? `<div class="acoes">${form("publicar", "b1", "Publicar na Meta")}${form("reprovar", "b2", "Reprovar")}</div><form method="post" action="/painel/criativos/${esc(c.id)}/melhorar${q}"><textarea name="feedback" rows="2" placeholder="O que melhorar? (ex.: título mais curto, falar do preço antes)" required></textarea><div class="acoes"><button class="b3" type="submit">Gerar nova versão</button></div></form>` : "";
-    return `<div class="criativo${c.video_story_chave ? " duplo" : ""}">${midia}<p><span class="tag ${c.status === "publicado" ? "bom" : c.status === "sombra" ? "atencao" : "ruim"}">${esc(c.status === "publicado" ? "no ar" : c.status === "sombra" ? "aguardando aprovação" : String(c.status))}</span> ${esc(c.dia)}${c.formato === "video" ? " · vídeo" : ""}${c.criativo_pai ? ` · nova versão do nº ${esc(c.criativo_pai)}` : ""}</p><p><b>${esc(copy.headline)}</b></p><p>${esc(copy.texto_primario)}</p>${c.feedback ? `<p><i>Pedido: ${esc(c.feedback)}</i></p>` : ""}${c.ad_id ? `<p class="mono">anúncio ${esc(c.ad_id)}</p>` : ""}${c.resposta && c.status === "erro" ? `<p class="mono">${esc(c.resposta)}</p>` : ""}${botoes}</div>`;
+    return `<div class="criativo${c.video_story_chave ? " duplo" : ""}">${midia}<p><span class="tag ${c.status === "publicado" ? "bom" : c.status === "sombra" ? "atencao" : "ruim"}">${esc(c.status === "publicado" ? "no ar" : c.status === "sombra" ? "aguardando aprovação" : c.status === "publicando" ? "enviando à Meta" : String(c.status))}</span> ${esc(c.dia)}${c.formato === "video" ? " · vídeo" : ""}${c.criativo_pai ? ` · nova versão do nº ${esc(c.criativo_pai)}` : ""}</p><p><b>${esc(copy.headline)}</b></p><p>${esc(copy.texto_primario)}</p>${c.feedback ? `<p><i>Pedido: ${esc(c.feedback)}</i></p>` : ""}${resultado(c)}${c.ad_id ? `<p class="mono">anúncio ${esc(c.ad_id)}</p>` : ""}${c.resposta && c.status === "erro" ? `<p class="mono">${esc(c.resposta)}</p>` : ""}${botoes}</div>`;
   }).join("") || "<p>Nenhum criativo ainda. Peça um: <span class=\"mono\">POST /admin/criativos/pedir?angulo=...&amp;formato=imagem|video</span></p>"}</div></section>
 
 <div class="grade">

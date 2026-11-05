@@ -126,6 +126,7 @@ Termine com um resumo escrito para ela guardar: o endereço do painel e de `/ent
 - "A conta de anúncios não tem acesso à conta do Instagram" (1815199) ao publicar um criativo: faltou a fase 3, passos 2 e 2b (página e Instagram no usuário do sistema; conta de anúncios conectada ao perfil).
 - A pasta de referência fica vazia: nenhum anúncio passou do mínimo de gasto e cadastros em 28 dias (biblioteca.ts). Pedidos dos agentes esperam; fixe um à mão ou peça direto.
 - Análise da referência com "Reasoning is mandatory": o modelo com imagem exige raciocínio ligado (já está em `raciocinio: "low"`); se trocar o modelo, mantenha.
+- Vídeo em "enviando à Meta" por muito tempo: a publicação de vídeo é em duas etapas (o clique envia os arquivos; o anúncio é criado quando a Meta termina de processar, pelo cron de 5 em 5 minutos). Se a Meta não processar em 2 horas, vira erro com o motivo. Confira se o cron `*/5 * * * *` está no wrangler.toml.
 - Publicar vídeo com erro no `asset_feed_spec` (dois formatos): a Meta mudou as posições aceitas em `asset_customization_rules`; ajuste `specDoisFormatos` em `src/agentes/criador.ts` com o nome que o erro citar.
 - "O criativo não deve incluir aprimoramentos padrão" (3858504): a Meta mudou a lista de recursos; ajuste `APRIMORAMENTOS_DESLIGADOS` em `src/agentes/criador.ts` (a mensagem de erro diz qual nome ela não aceita).
 - A Meta "não encontra" cadastros: confira em `src/anuncios.ts` quais `action_type` contam como cadastro para a conta dela.

@@ -3,7 +3,7 @@ import { TELA_PRODUTO } from "../src/config/negocio.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { acaoCriativo, lerCopy, metaPublicacaoConfigurada, registrarPedido, rodarCriador, verificarPorRegras } from "../src/agentes/criador.ts";
+import { acaoCriativo, concluirPublicacoes, lerCopy, metaPublicacaoConfigurada, registrarPedido, rodarCriador, verificarPorRegras } from "../src/agentes/criador.ts";
 import type { Copy, CriadorEnv } from "../src/agentes/criador.ts";
 import { htmlEscritorio, tituloComDestaque } from "../src/agentes/templates/escritorio.ts";
 import { atualizarReferencias, escolherReferencias, imagensDoAnuncio, lerIndice, referenciaManual, referenciasParaModelo, removerReferenciaManual } from "../src/agentes/referencia.ts";
@@ -433,4 +433,49 @@ test("pasta: anúncio fixado à mão (a tela de chat real) fica na pasta mesmo s
   assert.match(referenciasParaModelo(pasta.referencias), /chat1: "PrintDaTela_Chat_v1" · FIXADO PELO DONO/);
   assert.equal(await removerReferenciaManual(env, "chat1"), true);
   assert.deepEqual((await lerIndice(env)).referencias.map((r) => r.anuncio_id), ["win1"]);
+});
+
+test("publicar vídeo no painel: envia os dois vídeos e responde; o anúncio sai quando a Meta termina (cron de 5 min)", async () => {
+  const { env, sqlite } = banco();
+  await registrarPedido(env.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "a conversa na tela", motivo: "m", formato: "video" });
+  const base = fetchFalso({ copy: { ...COPY_VIDEO, contato: "Marcos Padaria" } });
+  await rodarCriador(env, 1, { renderPng: renderFalso, renderWebm: renderWebmFalso, fetchFn: base.fn, agora: AGORA });
+  // a Meta ainda processando
+  let pronto = false;
+  const chamadas: string[] = [];
+  const fn = (async (url: string, init?: RequestInit) => {
+    chamadas.push(url);
+    if (/\/vid\d+\?fields=status$/.test(url)) return resposta({ status: { video_status: pronto ? "ready" : "processing" } });
+    return base.fn(url, init);
+  }) as unknown as typeof fetch;
+  const r = await acaoCriativo(env, 1, "publicar", "", "dono@x.com", { fetchFn: fn, agora: AGORA });
+  assert.equal(r.ok, true);
+  assert.match(r.mensagem, /processando/);
+  let c = sqlite.prepare("SELECT status, video_id, video_story_id, ad_id FROM ads_criativos WHERE id = 1").get() as Record<string, string | null>;
+  assert.deepEqual({ ...c }, { status: "publicando", video_id: "vid5", video_story_id: "vid6", ad_id: null });
+  assert.ok(!chamadas.some((u) => u.endsWith("/ads")), "sem vídeo pronto, nenhum anúncio");
+  // o cron passa depois que a Meta termina
+  pronto = true;
+  const fim = await concluirPublicacoes(env, fn, new Date(AGORA.getTime() + 10 * 60_000));
+  assert.deepEqual(fim.map((x) => x.status), ["publicado"]);
+  c = sqlite.prepare("SELECT status, ad_id, creative_id FROM ads_criativos WHERE id = 1").get() as Record<string, string | null>;
+  assert.deepEqual({ ...c }, { status: "publicado", ad_id: "ad7", creative_id: "cr9" });
+  const criativo = new URLSearchParams(chamadas.length ? base.chamadas.find((x) => x.url.endsWith("/adcreatives"))!.corpo : "");
+  assert.ok(criativo.get("asset_feed_spec")!.includes("dd_story"), "os dois formatos no mesmo anúncio");
+  assert.deepEqual(await concluirPublicacoes(env, fn, AGORA), [], "nada mais pendente");
+});
+
+test("publicação de vídeo que a Meta não processa no prazo vira erro", async () => {
+  const { env, sqlite } = banco();
+  await registrarPedido(env.DB, "2026-10-29", "manual", { plataforma: "meta", campanha_id: null, campanha: null, angulo: "a conversa na tela", motivo: "m", formato: "video" });
+  const base = fetchFalso({ copy: { ...COPY_VIDEO, contato: "Marcos Padaria" } });
+  await rodarCriador(env, 1, { renderPng: renderFalso, renderWebm: renderWebmFalso, fetchFn: base.fn, agora: AGORA });
+  const fn = (async (url: string, init?: RequestInit) => (/\/vid\d+\?fields=status$/.test(url) ? resposta({ status: { video_status: "processing" } }) : base.fn(url, init))) as unknown as typeof fetch;
+  await acaoCriativo(env, 1, "publicar", "", "dono@x.com", { fetchFn: fn, agora: AGORA });
+  sqlite.exec("UPDATE ads_criativos SET revisado_em = '2026-10-29T10:00:00Z' WHERE id = 1");
+  const fim = await concluirPublicacoes(env, fn, AGORA);
+  assert.equal(fim[0].status, "erro");
+  const c = sqlite.prepare("SELECT status, resposta FROM ads_criativos WHERE id = 1").get() as Record<string, string>;
+  assert.equal(c.status, "erro");
+  assert.match(c.resposta, /não terminou de processar/);
 });

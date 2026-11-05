@@ -218,7 +218,7 @@ test("painel e /entrar renderizam com dados vazios e com um criativo em sombra (
   assert.ok(h0.includes("Negócio") && h0.includes("Nenhum criativo ainda") && h0.includes("Desligados"));
   const p = { estado: { criador: { nivel: 1, parado: false } }, criativos: [
     { id: 1, dia: "2026-10-29", status: "sombra", imagem_chave: "criativos/1.png", copy: { headline: "H", texto_primario: "T" }, formato: "imagem" },
-    { id: 2, dia: "2026-10-29", status: "publicado", formato: "video", video_chave: "criativos/2.webm", copy: { headline: "V" }, ad_id: "ad7", criativo_pai: 1, status_anuncio: "ACTIVE" },
+    { id: 2, dia: "2026-10-29", status: "publicado", formato: "video", video_chave: "criativos/2.webm", copy: { headline: "V" }, ad_id: "ad7", criativo_pai: 1, status_anuncio: "ACTIVE", res_gasto_cents: 12345, res_cadastros: 5, res_cliques: 40, res_impressoes: 3200, res_ate: "2026-11-04" },
     { id: 3, dia: "2026-10-29", status: "sombra", formato: "video", video_chave: "criativos/3.webm", video_story_chave: "criativos/3-story.webm", copy: { headline: "Dois formatos" } },
     { id: 4, dia: "2026-10-29", status: "reprovado", imagem_chave: "criativos/4.png", copy: { headline: "Reprovado" } },
     { id: 5, dia: "2026-10-29", status: "publicado", imagem_chave: "criativos/5.png", copy: { headline: "Pausado" }, ad_id: "ad5", status_anuncio: "PAUSED" },
@@ -230,5 +230,6 @@ test("painel e /entrar renderizam com dados vazios e com um criativo em sombra (
   assert.ok(h1.includes('src="/painel/criativos/3.webm?token=t"') && h1.includes('src="/painel/criativos/3-story.webm?token=t"') && h1.includes("Stories e Reels · 9:16"), "vídeo mostra 1:1 e 9:16 lado a lado");
   assert.ok(!h1.includes("criativos/4.png") && !h1.includes("criativos/5.png"), "reprovado e pausado na Meta ficam fora");
   assert.ok(h1.includes("no ar") && h1.includes("aguardando aprovação"));
+  assert.ok(h1.includes("Resultado desde a publicação") && h1.includes("R$ 24,69 por cadastro") && h1.includes("R$ 123,45 gastos"), "anúncio no ar mostra o resultado");
   assert.ok(paginaEntrar().includes("/auth/codigo"));
 });

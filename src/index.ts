@@ -33,7 +33,7 @@ import { resumoAnalista, rodarAnalista } from "./analista.ts";
 import { painelAgentes, rodarEquipe, rodarVigiaHorario } from "./agentes/equipe.ts";
 import { gravarEstado, lerEstado } from "./agentes/gestor.ts";
 import { montarDossie } from "./agentes/dossie.ts";
-import { acaoCriativo, contextoDoCriador, registrarPedido, rodarCriador } from "./agentes/criador.ts";
+import { acaoCriativo, concluirPublicacoes, contextoDoCriador, registrarPedido, rodarCriador } from "./agentes/criador.ts";
 import { atualizarReferencias, lerIndice, referenciaManual, removerReferenciaManual } from "./agentes/referencia.ts";
 import type { AcaoCriativo } from "./agentes/criador.ts";
 import { montarBiblioteca } from "./agentes/biblioteca.ts";
@@ -278,6 +278,9 @@ export default {
         await rodarAnalista(env);
         await rodarEquipe(env, "cron", fetch, new Date(), renderDe(env), renderWebmDe(env));
       })());
+    } else if (event.cron === "*/5 * * * *") {
+      // termina a publicação dos vídeos que esperam a Meta processar (sem nada pendente, é uma consulta só)
+      ctx.waitUntil(concluirPublicacoes(env).then(() => undefined));
     } else {
       ctx.waitUntil(rodarVigiaHorario(env));
     }

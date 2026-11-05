@@ -298,8 +298,8 @@ export async function publicarNaMeta(env: CriadorEnv, c: Copy, png: Uint8Array, 
  * No Instagram o anúncio sai em nome do perfil ligado à página: a conta de anúncios precisa estar conectada a esse perfil e o
  * usuário do sistema precisa ter a página e o perfil atribuídos (senão a Meta recusa com o subcódigo 1815199).
  */
-/** Sobe um vídeo para a conta e espera a Meta deixar "ready" (o criativo só aceita vídeo pronto). */
-async function subirVideo(env: CriadorEnv, webm: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs: number, tentativas: number): Promise<{ ok: true; video_id: string } | { ok: false; etapa: string; resposta: string }> {
+/** Só envia o vídeo para a biblioteca da conta (sem esperar o processamento). */
+async function enviarVideo(env: CriadorEnv, webm: Uint8Array, nome: string, fetchFn: typeof fetch): Promise<{ ok: true; video_id: string } | { ok: false; etapa: string; resposta: string }> {
   const fd = new FormData();
   fd.append("access_token", env.META_ADS_TOKEN!);
   fd.append("name", nome);
@@ -309,12 +309,25 @@ async function subirVideo(env: CriadorEnv, webm: Uint8Array, nome: string, fetch
   let videoId: string | null = null;
   try { videoId = (JSON.parse(upTexto) as { id?: string }).id ?? null; } catch { videoId = null; }
   if (!up.ok || !videoId) return { ok: false, etapa: "video", resposta: `HTTP ${up.status}: ${upTexto.slice(0, 600)}` };
+  return { ok: true, video_id: videoId };
+}
+
+/** Situação do processamento do vídeo na Meta: ready, processing, error (ou desconhecida). */
+async function statusVideo(env: CriadorEnv, videoId: string, fetchFn: typeof fetch): Promise<string> {
+  const st = await fetchFn(`https://graph.facebook.com/${META_API_VERSAO}/${videoId}?fields=status`, { headers: { authorization: `Bearer ${env.META_ADS_TOKEN}` } });
+  const j = (await st.json().catch(() => ({}))) as { status?: { video_status?: string } };
+  return j.status?.video_status ?? "desconhecido";
+}
+
+/** Sobe um vídeo para a conta e espera a Meta deixar "ready" (o criativo só aceita vídeo pronto). */
+async function subirVideo(env: CriadorEnv, webm: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs: number, tentativas: number): Promise<{ ok: true; video_id: string } | { ok: false; etapa: string; resposta: string }> {
+  const up = await enviarVideo(env, webm, nome, fetchFn);
+  if (!up.ok) return up;
   for (let i = 0; i < tentativas; i++) {
     await new Promise((r) => setTimeout(r, esperaMs));
-    const st = await fetchFn(`https://graph.facebook.com/${META_API_VERSAO}/${videoId}?fields=status`, { headers: { authorization: `Bearer ${env.META_ADS_TOKEN}` } });
-    const j = (await st.json().catch(() => ({}))) as { status?: { video_status?: string } };
-    if (j.status?.video_status === "ready") return { ok: true, video_id: videoId };
-    if (j.status?.video_status === "error") return { ok: false, etapa: "video", resposta: "a Meta não conseguiu processar o vídeo" };
+    const st = await statusVideo(env, up.video_id, fetchFn);
+    if (st === "ready") return up;
+    if (st === "error") return { ok: false, etapa: "video", resposta: "a Meta não conseguiu processar o vídeo" };
   }
   return { ok: false, etapa: "video", resposta: "vídeo ainda em processamento na Meta; tente publicar de novo em alguns minutos" };
 }
@@ -350,32 +363,77 @@ export function specDoisFormatos(env: CriadorEnv, c: Copy, quadrado: { video_id:
   };
 }
 
-/** Vídeo → capa → criativo → anúncio ACTIVE. Com `story`, o anúncio leva os dois formatos (1:1 e 9:16). */
-export async function publicarVideoNaMeta(env: CriadorEnv, c: Copy, webm: Uint8Array, capa: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs = Number(env.META_VIDEO_ESPERA_MS ?? 4000), tentativas = 20, story: { webm: Uint8Array; capa: Uint8Array } | null = null): Promise<{ ok: true; video_id: string; video_story_id: string | null; imagem_hash: string; creative_id: string; ad_id: string } | { ok: false; etapa: string; resposta: string }> {
+/** Criativo e anúncio ACTIVE a partir de vídeos já prontos na Meta (com o 9:16, um vídeo por posicionamento). */
+async function criarAnuncioDeVideo(env: CriadorEnv, c: Copy, nome: string, quadrado: { video_id: string; hash: string }, story: { video_id: string; hash: string } | null, fetchFn: typeof fetch): Promise<{ ok: true; creative_id: string; ad_id: string } | { ok: false; etapa: string; resposta: string }> {
   const conta = `act_${env.META_AD_ACCOUNT_ID}`;
-  const v = await subirVideo(env, webm, nome, fetchFn, esperaMs, tentativas);
-  if (!v.ok) return v;
-  const hash = await subirCapa(env, capa, `${nome}-capa`, fetchFn);
-  if (typeof hash !== "string") return { ok: false, ...hash };
-  let corpo: Record<string, string>;
-  let storyId: string | null = null;
-  if (story) {
-    const vs = await subirVideo(env, story.webm, `${nome}_story`, fetchFn, esperaMs, tentativas);
-    if (!vs.ok) return { ...vs, etapa: "video_story" };
-    const hs = await subirCapa(env, story.capa, `${nome}_story-capa`, fetchFn);
-    if (typeof hs !== "string") return { ok: false, etapa: "capa_story", resposta: hs.resposta };
-    storyId = vs.video_id;
-    corpo = { name: nome, object_story_spec: JSON.stringify({ page_id: env.META_PAGE_ID }), asset_feed_spec: JSON.stringify(specDoisFormatos(env, c, { video_id: v.video_id, hash }, { video_id: vs.video_id, hash: hs })), ...APRIMORAMENTOS };
-  } else {
-    const spec = { page_id: env.META_PAGE_ID, video_data: { video_id: v.video_id, image_hash: hash, message: c.texto_primario, title: c.headline, link_description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } } };
-    corpo = { name: nome, object_story_spec: JSON.stringify(spec), ...APRIMORAMENTOS };
-  }
+  const corpo: Record<string, string> = story
+    ? { name: nome, object_story_spec: JSON.stringify({ page_id: env.META_PAGE_ID }), asset_feed_spec: JSON.stringify(specDoisFormatos(env, c, quadrado, story)), ...APRIMORAMENTOS }
+    : { name: nome, object_story_spec: JSON.stringify({ page_id: env.META_PAGE_ID, video_data: { video_id: quadrado.video_id, image_hash: quadrado.hash, message: c.texto_primario, title: c.headline, link_description: c.descricao, call_to_action: { type: "LEARN_MORE", value: { link: env.CRIADOR_LINK } } } }), ...APRIMORAMENTOS };
   const cr = await postMeta(env, `${conta}/adcreatives`, corpo, fetchFn);
   const creativeId = typeof cr.json.id === "string" ? cr.json.id : null;
   if (!cr.ok || !creativeId) return { ok: false, etapa: "criativo", resposta: `HTTP ${cr.status}: ${cr.texto}` };
   const ad = await postMeta(env, `${conta}/ads`, { name: nome, adset_id: env.META_ADSET_CRIADOR_ID!, creative: JSON.stringify({ creative_id: creativeId }), status: "ACTIVE" }, fetchFn);
   const adId = typeof ad.json.id === "string" ? ad.json.id : null;
   if (!ad.ok || !adId) return { ok: false, etapa: "anuncio", resposta: `HTTP ${ad.status}: ${ad.texto}` };
+  return { ok: true, creative_id: creativeId, ad_id: adId };
+}
+
+/** Quanto a publicação de um vídeo pode ficar esperando a Meta processar antes de virar erro. */
+export const PUBLICACAO_PRAZO_MIN = 120;
+
+/**
+ * Termina uma publicação de vídeo que ficou em "publicando": quando os vídeos estão prontos na Meta, cria o
+ * criativo e o anúncio. Chamado logo depois do envio (algumas tentativas curtas) e pelo cron a cada 5 minutos.
+ */
+export async function concluirPublicacao(env: CriadorEnv, id: number, fetchFn: typeof fetch = fetch, agora = new Date()): Promise<{ status: "publicado" | "publicando" | "erro"; mensagem: string }> {
+  const c = await env.DB.prepare("SELECT id, status, copy_json, video_id, video_story_id, imagem_hash, resposta, revisado_em FROM ads_criativos WHERE id = ?1").bind(id).first<{ id: number; status: string; copy_json: string; video_id: string | null; video_story_id: string | null; imagem_hash: string | null; resposta: string | null; revisado_em: string | null }>();
+  if (!c || c.status !== "publicando" || !c.video_id || !c.imagem_hash) return { status: "erro", mensagem: "nada para concluir" };
+  let extra: { nome?: string; capa_story_hash?: string | null } = {};
+  try { extra = JSON.parse(c.resposta ?? "{}") as typeof extra; } catch { extra = {}; }
+  const estados = await Promise.all([c.video_id, c.video_story_id].filter((v): v is string => Boolean(v)).map((v) => statusVideo(env, v, fetchFn)));
+  const falhar = async (msg: string) => {
+    await env.DB.prepare("UPDATE ads_criativos SET status = 'erro', resposta = ?2 WHERE id = ?1").bind(id, msg).run();
+    return { status: "erro" as const, mensagem: msg };
+  };
+  if (estados.includes("error")) return falhar("video: a Meta não conseguiu processar o vídeo");
+  if (!estados.every((e) => e === "ready")) {
+    const desde = c.revisado_em ? (agora.getTime() - new Date(c.revisado_em).getTime()) / 60_000 : 0;
+    if (desde > PUBLICACAO_PRAZO_MIN) return falhar(`video: a Meta não terminou de processar em ${PUBLICACAO_PRAZO_MIN} minutos`);
+    return { status: "publicando", mensagem: "vídeos enviados; a Meta ainda está processando. O anúncio é criado sozinho em alguns minutos." };
+  }
+  const copy = JSON.parse(c.copy_json) as Copy;
+  const story = c.video_story_id && extra.capa_story_hash ? { video_id: c.video_story_id, hash: extra.capa_story_hash } : null;
+  const r = await criarAnuncioDeVideo(env, copy, extra.nome ?? copy.nome, { video_id: c.video_id, hash: c.imagem_hash }, story, fetchFn);
+  if (!r.ok) return falhar(`${r.etapa}: ${r.resposta}`);
+  await env.DB.prepare("UPDATE ads_criativos SET status = 'publicado', creative_id = ?2, ad_id = ?3, resposta = 'ok', publicado_em = ?4 WHERE id = ?1").bind(id, r.creative_id, r.ad_id, nowIso()).run();
+  return { status: "publicado", mensagem: `publicado: anúncio ${r.ad_id}` };
+}
+
+/** Cron: conclui as publicações de vídeo que estão esperando a Meta. */
+export async function concluirPublicacoes(env: CriadorEnv, fetchFn: typeof fetch = fetch, agora = new Date()): Promise<Array<{ id: number; status: string; mensagem: string }>> {
+  const r = await env.DB.prepare("SELECT id FROM ads_criativos WHERE status = 'publicando' ORDER BY id").all<{ id: number }>();
+  const out: Array<{ id: number; status: string; mensagem: string }> = [];
+  for (const x of r.results) out.push({ id: Number(x.id), ...(await concluirPublicacao(env, Number(x.id), fetchFn, agora)) });
+  return out;
+}
+
+/** Vídeo → capa → criativo → anúncio ACTIVE. Com `story`, o anúncio leva os dois formatos (1:1 e 9:16). */
+export async function publicarVideoNaMeta(env: CriadorEnv, c: Copy, webm: Uint8Array, capa: Uint8Array, nome: string, fetchFn: typeof fetch, esperaMs = Number(env.META_VIDEO_ESPERA_MS ?? 4000), tentativas = 20, story: { webm: Uint8Array; capa: Uint8Array } | null = null): Promise<{ ok: true; video_id: string; video_story_id: string | null; imagem_hash: string; creative_id: string; ad_id: string } | { ok: false; etapa: string; resposta: string }> {
+  const v = await subirVideo(env, webm, nome, fetchFn, esperaMs, tentativas);
+  if (!v.ok) return v;
+  const hash = await subirCapa(env, capa, `${nome}-capa`, fetchFn);
+  if (typeof hash !== "string") return { ok: false, ...hash };
+  let storyFinal: { video_id: string; hash: string } | null = null;
+  if (story) {
+    const vs = await subirVideo(env, story.webm, `${nome}_story`, fetchFn, esperaMs, tentativas);
+    if (!vs.ok) return { ...vs, etapa: "video_story" };
+    const hs = await subirCapa(env, story.capa, `${nome}_story-capa`, fetchFn);
+    if (typeof hs !== "string") return { ok: false, etapa: "capa_story", resposta: hs.resposta };
+    storyFinal = { video_id: vs.video_id, hash: hs };
+  }
+  const r = await criarAnuncioDeVideo(env, c, nome, { video_id: v.video_id, hash }, storyFinal, fetchFn);
+  if (!r.ok) return r;
+  const storyId = storyFinal?.video_id ?? null, creativeId = r.creative_id, adId = r.ad_id;
   return { ok: true, video_id: v.video_id, video_story_id: storyId, imagem_hash: hash, creative_id: creativeId, ad_id: adId };
 }
 
@@ -531,8 +589,10 @@ export async function acaoCriativo(env: CriadorEnv, id: number, acao: AcaoCriati
     const png = new Uint8Array(await obj.arrayBuffer());
     const copy = JSON.parse(c.copy_json) as Copy;
     const nomePub = `${copy.nome}_${diaBrt(agora).replace(/-/g, "")}_aprovado`;
-    let pub: Awaited<ReturnType<typeof publicarNaMeta>> | Awaited<ReturnType<typeof publicarVideoNaMeta>>;
     if (c.formato === "video" && c.video_chave) {
+      // vídeo em duas etapas: o clique só envia os arquivos (rápido) e o anúncio é criado quando a Meta termina de
+      // processar (aqui mesmo, se for rápido, ou pelo cron de 5 em 5 minutos). Esperar tudo no clique estourava o
+      // limite de ~100 s de uma requisição.
       const v = await env.CRIATIVOS.get(c.video_chave);
       if (!v) return { ok: false, mensagem: "vídeo não encontrado no R2" };
       let story: { webm: Uint8Array; capa: Uint8Array } | null = null;
@@ -541,8 +601,29 @@ export async function acaoCriativo(env: CriadorEnv, id: number, acao: AcaoCriati
         if (!vs || !cs) return { ok: false, mensagem: "vídeo 9:16 não encontrado no R2" };
         story = { webm: new Uint8Array(await vs.arrayBuffer()), capa: new Uint8Array(await cs.arrayBuffer()) };
       }
-      pub = await publicarVideoNaMeta(env, copy, new Uint8Array(await v.arrayBuffer()), png, nomePub, fetchFn, undefined, undefined, story);
-    } else pub = await publicarNaMeta(env, copy, png, nomePub, fetchFn);
+      const falha = async (etapa: string, resposta: string) => {
+        await env.DB.prepare("UPDATE ads_criativos SET status = 'erro', resposta = ?2, revisado_por = ?3, revisado_em = ?4 WHERE id = ?1").bind(id, `${etapa}: ${resposta}`, quem, nowIso()).run();
+        return { ok: false, mensagem: `a Meta recusou (${etapa}): ${resposta.slice(0, 200)}` };
+      };
+      const vq = await enviarVideo(env, new Uint8Array(await v.arrayBuffer()), nomePub, fetchFn);
+      if (!vq.ok) return falha(vq.etapa, vq.resposta);
+      const hq = await subirCapa(env, png, `${nomePub}-capa`, fetchFn);
+      if (typeof hq !== "string") return falha(hq.etapa, hq.resposta);
+      let vsId: string | null = null, hs: string | null = null;
+      if (story) {
+        const vs = await enviarVideo(env, story.webm, `${nomePub}_story`, fetchFn);
+        if (!vs.ok) return falha("video_story", vs.resposta);
+        const h = await subirCapa(env, story.capa, `${nomePub}_story-capa`, fetchFn);
+        if (typeof h !== "string") return falha("capa_story", h.resposta);
+        vsId = vs.video_id; hs = h;
+      }
+      await env.DB.prepare("UPDATE ads_criativos SET status = 'publicando', video_id = ?2, video_story_id = ?3, imagem_hash = ?4, resposta = ?5, revisado_por = ?6, revisado_em = ?7 WHERE id = ?1").bind(id, vq.video_id, vsId, hq, JSON.stringify({ nome: nomePub, capa_story_hash: hs }), quem, nowIso()).run();
+      const espera = Number(env.META_VIDEO_ESPERA_MS ?? 5000);
+      let r = await concluirPublicacao(env, id, fetchFn, agora);
+      for (let i = 0; i < 6 && r.status === "publicando"; i++) { await new Promise((x) => setTimeout(x, espera)); r = await concluirPublicacao(env, id, fetchFn, agora); }
+      return { ok: r.status !== "erro", mensagem: r.mensagem };
+    }
+    const pub = await publicarNaMeta(env, copy, png, nomePub, fetchFn);
     if (!pub.ok) {
       await env.DB.prepare("UPDATE ads_criativos SET status = 'erro', resposta = ?2, revisado_por = ?3, revisado_em = ?4 WHERE id = ?1").bind(id, `${pub.etapa}: ${pub.resposta}`, quem, nowIso()).run();
       return { ok: false, mensagem: `a Meta recusou (${pub.etapa}): ${pub.resposta.slice(0, 200)}` };
@@ -566,6 +647,6 @@ export const STATUS_EM_CIRCULACAO = ["ACTIVE", "IN_PROCESS", "PENDING_REVIEW", "
 /** Lista dos criativos; status_anuncio vem da coleta (ads_anuncios), null quando a coleta ainda não viu o anúncio. */
 export async function listarCriativos(db: D1Database, dias = 30): Promise<Array<Record<string, unknown>>> {
   const de = diaBrt(addDays(new Date(), -(dias - 1)));
-  const r = await db.prepare("SELECT id, dia, pedido_id, campanha_id, conjunto_id, angulo, modelo, copy_json, verificacao_json, imagem_chave, creative_id, ad_id, status, resposta, criado_em, publicado_em, feedback, criativo_pai, revisado_por, revisado_em, formato, video_chave, video_id, video_story_chave, anuncio_base, (SELECT a.status FROM ads_anuncios a WHERE a.plataforma = 'meta' AND a.anuncio_id = ads_criativos.ad_id) AS status_anuncio FROM ads_criativos WHERE dia >= ?1 ORDER BY id DESC LIMIT 50").bind(de).all<Record<string, unknown>>();
+  const r = await db.prepare("SELECT id, dia, pedido_id, campanha_id, conjunto_id, angulo, modelo, copy_json, verificacao_json, imagem_chave, creative_id, ad_id, status, resposta, criado_em, publicado_em, feedback, criativo_pai, revisado_por, revisado_em, formato, video_chave, video_id, video_story_chave, anuncio_base, (SELECT a.status FROM ads_anuncios a WHERE a.plataforma = 'meta' AND a.anuncio_id = ads_criativos.ad_id) AS status_anuncio, (SELECT SUM(d.gasto_cents) FROM ads_anuncio_diario d WHERE d.plataforma = 'meta' AND d.anuncio_id = ads_criativos.ad_id) AS res_gasto_cents, (SELECT SUM(d.resultados) FROM ads_anuncio_diario d WHERE d.plataforma = 'meta' AND d.anuncio_id = ads_criativos.ad_id) AS res_cadastros, (SELECT SUM(d.cliques) FROM ads_anuncio_diario d WHERE d.plataforma = 'meta' AND d.anuncio_id = ads_criativos.ad_id) AS res_cliques, (SELECT SUM(d.impressoes) FROM ads_anuncio_diario d WHERE d.plataforma = 'meta' AND d.anuncio_id = ads_criativos.ad_id) AS res_impressoes, (SELECT MAX(d.dia) FROM ads_anuncio_diario d WHERE d.plataforma = 'meta' AND d.anuncio_id = ads_criativos.ad_id) AS res_ate FROM ads_criativos WHERE dia >= ?1 ORDER BY id DESC LIMIT 50").bind(de).all<Record<string, unknown>>();
   return r.results.map((x) => ({ ...x, copy: JSON.parse(String(x.copy_json)), verificacao: x.verificacao_json ? JSON.parse(String(x.verificacao_json)) : null, copy_json: undefined, verificacao_json: undefined }));
 }
