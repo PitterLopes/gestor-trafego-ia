@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { acaoCriativo, concluirPublicacoes, lerCopy, metaPublicacaoConfigurada, registrarPedido, rodarCriador, verificarPorRegras } from "../src/agentes/criador.ts";
 import type { Copy, CriadorEnv } from "../src/agentes/criador.ts";
 import { htmlEscritorio, tituloComDestaque } from "../src/agentes/templates/escritorio.ts";
-import { atualizarReferencias, escolherReferencias, imagensDoAnuncio, lerIndice, referenciaManual, referenciasParaModelo, removerReferenciaManual } from "../src/agentes/referencia.ts";
+import { atualizarReferencias, escolherReferencias, garantirMiniaturas, imagensDoAnuncio, lerIndice, rankingAnuncios, referenciaManual, referenciasParaModelo, removerReferenciaManual } from "../src/agentes/referencia.ts";
 import type { AnuncioReferencia } from "../src/agentes/biblioteca.ts";
 import { lerPlano } from "../src/agentes/analista_ia.ts";
 
@@ -36,6 +36,7 @@ function r2Falso(): { bucket: R2Bucket; guardados: Map<string, Uint8Array> } {
   const guardados = new Map<string, Uint8Array>();
   const bucket = {
     put: async (k: string, v: Uint8Array | string) => { guardados.set(k, typeof v === "string" ? new TextEncoder().encode(v) : v); return null; },
+    head: async (k: string) => (guardados.has(k) ? { key: k } : null),
     get: async (k: string) => (guardados.has(k) ? { body: guardados.get(k), arrayBuffer: async () => guardados.get(k)!.slice().buffer, text: async () => new TextDecoder().decode(guardados.get(k)) } : null),
   } as unknown as R2Bucket;
   return { bucket, guardados };
@@ -478,4 +479,31 @@ test("publicação de vídeo que a Meta não processa no prazo vira erro", async
   const c = sqlite.prepare("SELECT status, resposta FROM ads_criativos WHERE id = 1").get() as Record<string, string>;
   assert.equal(c.status, "erro");
   assert.match(c.resposta, /não terminou de processar/);
+});
+
+test("ranking da tela: mais cadastros primeiro, marca a base e a pasta, e baixa a imagem dos que faltam", async () => {
+  const { env, sqlite, r2 } = banco(); // win1: 140 cadastros
+  anuncioComLeads(sqlite, "chat1", "Segundo", "t", 86_000, 28);
+  anuncioComLeads(sqlite, "zero", "SemLead", "t", 90_000, 0);
+  anuncioComLeads(sqlite, "empA", "EmpateCaro", "t", 30_000, 5);
+  anuncioComLeads(sqlite, "empB", "EmpateBarato", "t", 10_000, 5);
+  await atualizarReferencias(env, fetchReferencia().fn, AGORA);
+  const r = await rankingAnuncios(env, AGORA);
+  assert.deepEqual(r.map((x) => x.anuncio), ["EscritorioMock_4x5", "Segundo", "EmpateBarato", "EmpateCaro"], "sem cadastro fica fora; empate vai para o mais barato");
+  assert.deepEqual(r.map((x) => x.posicao), [1, 2, 3, 4]);
+  assert.equal(r[0].base, true);
+  assert.equal(r[0].na_pasta, true);
+  assert.equal(r[0].imagem_chave, "referencia/win1.jpg");
+  // chat1 (Segundo) também foi para a pasta (top 2); os outros ganham miniatura, sem modelo
+  assert.ok(r2.has("referencia/chat1.png"));
+  const f = fetchReferencia();
+  const fn = (async (url: string, init?: RequestInit) => {
+    if (/\/emp[AB]\?fields=creative/.test(url)) return resposta({ creative: { id: "crChat" } });
+    return f.fn(url, init);
+  }) as unknown as typeof fetch;
+  const m = await garantirMiniaturas(env, fn, AGORA);
+  assert.equal(m.baixadas, 2);
+  assert.ok(r2.has("referencia/mini/empA.png") && r2.has("referencia/mini/empB.png"));
+  assert.equal(f.chamadas.filter((c) => c.url.includes("openrouter")).length, 0, "miniatura não chama o modelo");
+  assert.equal((await rankingAnuncios(env, AGORA))[2].imagem_chave, "referencia/mini/empB.png");
 });

@@ -10,7 +10,7 @@
  *   GET  /entrar · /auth/*                          login por e-mail + código
  * Painel (sessão, ou ?token=ADMIN_TOKEN):
  *   GET  /painel                                   negócio, time, criativos (com aprovação), plano, relatório, alertas
- *   GET  /painel/criativos/<id>.png|.webm|-capa.png|-story.webm|-story-capa.png
+ *   GET  /painel/criativos/<id>.png|.webm|-capa.png|-story.webm|-story-capa.png · /painel/referencias/[mini/]<id>.jpg
  *   POST /painel/criativos/<id>/(publicar|reprovar|melhorar)   formulário do painel
  * Administração (Authorization: Bearer ADMIN_TOKEN):
  *   POST /admin/anuncios/varrer[?dias=7] · GET /admin/anuncios · GET /admin/analista · POST /admin/analista/rodar
@@ -248,6 +248,12 @@ export default {
           const [p, m] = await Promise.all([painelAgentes(env), lerMetricas(env.DB)]);
           const extras = { eventos: await resumoEventos(env.DB), eventos_ativos: eventosAtivos(env), ingestao: await resumoIngestao(env.DB) };
           return new Response(paginaPainel(p, m, extras, quem, q), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+        }
+        const imgAnuncio = /^\/painel\/referencias\/((?:mini\/)?\d{6,30})\.(jpg|png|webp)$/.exec(path);
+        if (imgAnuncio && request.method === "GET") {
+          const obj = env.CRIATIVOS ? await env.CRIATIVOS.get(`referencia/${imgAnuncio[1]}.${imgAnuncio[2]}`) : null;
+          if (!obj) throw new HttpError(404, "imagem não encontrada");
+          return new Response(obj.body, { headers: { "content-type": imgAnuncio[2] === "jpg" ? "image/jpeg" : `image/${imgAnuncio[2]}`, "cache-control": "private, max-age=600" } });
         }
         const midia = /^\/painel\/criativos\/(\d+)((?:-story)?(?:-capa)?)\.(png|webm)$/.exec(path);
         if (midia && request.method === "GET") return midiaCriativo(env, midia[1], midia[2] ?? "", midia[3]);

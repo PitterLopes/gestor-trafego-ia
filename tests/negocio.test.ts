@@ -216,7 +216,10 @@ test("painel e /entrar renderizam com dados vazios e com um criativo em sombra (
   const extras = { eventos: { por_status: [], ultimos_erros: [] }, eventos_ativos: false, ingestao: { ultimos: [], clientes: 0, pagamentos: 0, com_clique: 0 } };
   const h0 = paginaPainel({}, vazio, extras, { email: "a@x.com", nome: "A", papel: "admin" }, "");
   assert.ok(h0.includes("Negócio") && h0.includes("Nenhum criativo ainda") && h0.includes("Desligados"));
-  const p = { estado: { criador: { nivel: 1, parado: false } }, criativos: [
+  const p = { estado: { criador: { nivel: 1, parado: false } }, ranking: [
+    { posicao: 1, anuncio_id: "900000000000000001", anuncio: "Campeao_4x5", status: "ACTIVE", gasto_28d: 260500, cadastros_28d: 143, custo_cadastro_cents: 1822, base: true, na_pasta: true, imagem_chave: "referencia/900000000000000001.jpg" },
+    { posicao: 2, anuncio_id: "900000000000000003", anuncio: "Reels_pausado", status: "CAMPAIGN_PAUSED", gasto_28d: 18200, cadastros_28d: 7, custo_cadastro_cents: 2600, base: false, na_pasta: false, imagem_chave: null },
+  ], criativos: [
     { id: 1, dia: "2026-10-29", status: "sombra", imagem_chave: "criativos/1.png", copy: { headline: "H", texto_primario: "T" }, formato: "imagem" },
     { id: 2, dia: "2026-10-29", status: "publicado", formato: "video", video_chave: "criativos/2.webm", copy: { headline: "V" }, ad_id: "ad7", criativo_pai: 1, status_anuncio: "ACTIVE", res_gasto_cents: 12345, res_cadastros: 5, res_cliques: 40, res_impressoes: 3200, res_ate: "2026-11-04" },
     { id: 3, dia: "2026-10-29", status: "sombra", formato: "video", video_chave: "criativos/3.webm", video_story_chave: "criativos/3-story.webm", copy: { headline: "Dois formatos" } },
@@ -230,6 +233,7 @@ test("painel e /entrar renderizam com dados vazios e com um criativo em sombra (
   assert.ok(h1.includes('src="/painel/criativos/3.webm?token=t"') && h1.includes('src="/painel/criativos/3-story.webm?token=t"') && h1.includes("Stories e Reels · 9:16"), "vídeo mostra 1:1 e 9:16 lado a lado");
   assert.ok(!h1.includes("criativos/4.png") && !h1.includes("criativos/5.png"), "reprovado e pausado na Meta ficam fora");
   assert.ok(h1.includes("no ar") && h1.includes("aguardando aprovação"));
+  assert.ok(h1.indexOf("Campeao_4x5") < h1.indexOf("Reels_pausado") && h1.includes('src="/painel/referencias/900000000000000001.jpg?token=t"') && h1.includes("base das variações"), "ranking por cadastro, com imagem");
   assert.ok(h1.includes("Resultado desde a publicação") && h1.includes("R$ 24,69 por cadastro") && h1.includes("R$ 123,45 gastos"), "anúncio no ar mostra o resultado");
   assert.ok(paginaEntrar().includes("/auth/codigo"));
 });

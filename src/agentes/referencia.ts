@@ -295,7 +295,9 @@ export async function atualizarReferencias(env: ReferenciaEnv, fetchFn: typeof f
     if (a) referencias.push(await prepararReferencia(env, a, "manual", fetchFn, agora, forcar));
   }
   await gravarIndice(env, escolhidos.map((a) => a.anuncio_id), manuais);
-  return { referencias, erros: referencias.filter((r) => r.erro).map((r) => `${r.anuncio}: ${r.erro}`) };
+  // e a imagem dos outros anúncios do ranking da tela (só download, sem modelo)
+  const mini = await garantirMiniaturas(env, fetchFn, agora);
+  return { referencias, erros: [...referencias.filter((r) => r.erro).map((r) => `${r.anuncio}: ${r.erro}`), ...mini.erros] };
 }
 
 /** Um anúncio escolhido à mão (pode não ter cadastros ainda): entra na pasta como "manual". */
@@ -331,4 +333,65 @@ export function referenciasParaModelo(refs: Referencia[]): string {
   return `PASTA DE REFERÊNCIA (os anúncios que mais trazem cadastro; a imagem foi baixada e analisada). Peça criativos como variações destes, apontando o anuncio_base. Vídeos mostram a tela de chat do produto (não o WhatsApp):\n${refs
     .map((r) => `- anuncio_base ${r.anuncio_id}: "${r.anuncio}"${r.escolhido === "manual" ? " · FIXADO PELO DONO (modelo visual a seguir)" : ""} · ${r.cadastros_28d} cadastros em 28d · ${reais(r.custo_cadastro_cents)} por cadastro\n  Título: ${r.titulo ?? "—"}\n  Texto: ${(r.texto ?? "—").replace(/\s+/g, " ").slice(0, 300)}${r.analise ? `\n${analiseParaModelo(r)}` : ""}`)
     .join("\n")}`;
+}
+
+// ---------- ranking: os anúncios da conta que trazem cadastro, para a tela ----------
+
+/** Quantos anúncios com cadastro aparecem no ranking da tela. */
+export const RANKING_TOP = 8;
+
+export interface ItemRanking {
+  posicao: number;
+  anuncio_id: string;
+  anuncio: string;
+  status: string | null;
+  gasto_28d: number;
+  cadastros_28d: number;
+  custo_cadastro_cents: number | null;
+  /** é o anúncio que o Criador usa como base (o melhor custo por cadastro entre os que convertem com confiança) */
+  base: boolean;
+  na_pasta: boolean;
+  imagem_chave: string | null;
+}
+
+const MINI = (id: string, ext: string) => `referencia/mini/${id}.${ext}`;
+
+async function chaveImagem(env: ReferenciaEnv, id: string): Promise<string | null> {
+  if (!env.CRIATIVOS) return null;
+  const ref = await lerReferencia(env, id);
+  if (ref?.imagem_chave) return ref.imagem_chave;
+  for (const ext of ["jpg", "png", "webp"]) if (await env.CRIATIVOS.head(MINI(id, ext))) return MINI(id, ext);
+  return null;
+}
+
+/** Ranking por cadastros em 28 dias (empate: menor custo por cadastro), com a imagem guardada quando houver. */
+export async function rankingAnuncios(env: ReferenciaEnv, agora = new Date()): Promise<ItemRanking[]> {
+  const [todos, b, j] = await Promise.all([lerAnuncios(env.DB, agora), montarBiblioteca(env.DB, agora), lerIndiceBruto(env)]);
+  const pasta = new Set([...j.ids, ...j.manuais]);
+  const lista = todos.filter((a) => a.cadastros_28d > 0 && a.gasto_28d > 0)
+    .sort((x, y) => y.cadastros_28d - x.cadastros_28d || (x.custo_cadastro_cents ?? Infinity) - (y.custo_cadastro_cents ?? Infinity))
+    .slice(0, RANKING_TOP);
+  return Promise.all(lista.map(async (a, i) => ({
+    posicao: i + 1, anuncio_id: a.anuncio_id, anuncio: a.anuncio, status: a.status, gasto_28d: a.gasto_28d, cadastros_28d: a.cadastros_28d, custo_cadastro_cents: a.custo_cadastro_cents,
+    base: b.bases[0]?.anuncio_id === a.anuncio_id, na_pasta: pasta.has(a.anuncio_id), imagem_chave: await chaveImagem(env, a.anuncio_id),
+  })));
+}
+
+/** Baixa (sem análise, sem modelo) a imagem dos anúncios do ranking que ainda não têm imagem guardada. Só lê a Meta. */
+export async function garantirMiniaturas(env: ReferenciaEnv, fetchFn: typeof fetch = fetch, agora = new Date()): Promise<{ baixadas: number; erros: string[] }> {
+  const out = { baixadas: 0, erros: [] as string[] };
+  if (!env.CRIATIVOS || !env.META_ADS_TOKEN) return out;
+  for (const item of await rankingAnuncios(env, agora)) {
+    if (item.imagem_chave) continue;
+    try {
+      const img = await imagensDoAnuncio(env, item.anuncio_id, fetchFn);
+      const baixada = img ? await baixarImagem(img.urls, fetchFn) : null;
+      if (!baixada) { out.erros.push(`${item.anuncio}: sem imagem para baixar`); continue; }
+      await env.CRIATIVOS.put(MINI(item.anuncio_id, extensao(baixada.tipo)), baixada.bytes, { httpMetadata: { contentType: baixada.tipo } });
+      out.baixadas += 1;
+    } catch (e) {
+      out.erros.push(`${item.anuncio}: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`);
+    }
+  }
+  return out;
 }

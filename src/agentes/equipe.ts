@@ -22,7 +22,7 @@ import type { RelatorEnv } from "./relator.ts";
 import { listarPublicos, rodarPublicos } from "./publicos.ts";
 import type { PublicosEnv } from "./publicos.ts";
 import type { CriadorEnv, RenderPng, RenderWebm } from "./criador.ts";
-import { atualizarReferencias } from "./referencia.ts";
+import { atualizarReferencias, rankingAnuncios } from "./referencia.ts";
 import type { ReferenciaEnv } from "./referencia.ts";
 
 export type EquipeEnv = AnalistaEnv & GestorEnv & CriadorEnv & VigiaEnv & EstrategistaEnv & RelatorEnv & PublicosEnv & ReferenciaEnv;
@@ -179,6 +179,7 @@ export async function painelAgentes(env: EquipeEnv): Promise<Record<string, unkn
     execucoes: execucoes.results,
     acoes: await resumoAcoes(env.DB),
     criativos: await listarCriativos(env.DB),
+    ranking: await rankingAnuncios(env),
     alertas: await listarAlertas(env.DB),
     plano: await lerPlanoAtual(env.DB),
     relatorio: await lerRelatorioAtual(env.DB),
